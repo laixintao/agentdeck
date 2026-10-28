@@ -42,7 +42,8 @@ final class IntegrationTests: XCTestCase {
     }
     func testSocketIdentityWithComma() {
         XCTAssertEqual(Tmux.socketFromEnvironment("/tmp/my,socket,123,0"), "/tmp/my,socket")
-        XCTAssertEqual(Tmux.canonicalSocket("/tmp/tmux-503/default"), Tmux.canonicalSocket("/private/tmp/tmux-503/default"))
+        let missing = "agentdeck-missing-" + UUID().uuidString
+        XCTAssertEqual(Tmux.canonicalSocket("/tmp/\(missing)/nested/default"), Tmux.canonicalSocket("/private/tmp/\(missing)/nested/default"))
     }
     func testHermesHookContracts() {
         XCTAssertEqual(Hermes.status(for: "pre_llm_call"), .working)

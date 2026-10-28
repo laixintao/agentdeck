@@ -21,7 +21,6 @@ final class DeckStore: NSObject, ObservableObject {
     @Published var hermesSetupMessage: String?
     @AppStorage("tmuxPath") var tmuxPath = ""
     @AppStorage("extraSockets") var extraSockets = ""
-    @AppStorage("quietSeconds") var quietSeconds = 45.0
     @AppStorage("hermesHome") var hermesHome = "~/.hermes"
     private var monitor = Monitor()
     private let hermesGateway = HermesGateway()
@@ -78,7 +77,6 @@ final class DeckStore: NSObject, ObservableObject {
         scan.panes += gui.panes; scan.errors += gui.errors
         scan.successfulSockets.formUnion(gui.successfulSources); events += gui.events
         errors = scan.errors; socketCount = scan.socketCount
-        monitor.quietInterval = max(10, quietSeconds)
         for event in events where latestEvents[event.paneKey].map({ $0.date <= event.date }) ?? true { latestEvents[event.paneKey] = event }
         _ = monitor.ingest(scan, events: Array(latestEvents.values))
         records = Array(monitor.records.values)

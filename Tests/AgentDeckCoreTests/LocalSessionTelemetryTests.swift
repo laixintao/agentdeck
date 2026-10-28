@@ -2,6 +2,30 @@ import XCTest
 @testable import AgentDeckCore
 
 final class LocalSessionTelemetryTests: XCTestCase {
+    func testCodexLifecycleUsesTaskEventsAndNotIndividualToolCompletions() {
+        func row(_ type: String, _ timestamp: String = "2026-10-28T00:00:00.000Z") -> [String: Any] {
+            ["type": "event_msg", "timestamp": timestamp, "payload": ["type": type, "turn_id": "test-turn"]]
+        }
+        let started = row("task_started")
+        XCTAssertEqual(LocalSessionTelemetry.codexEvent([started, row("item_completed"), row("token_count")], paneKey: "test")?.status, .working)
+        let done = row("task_complete", "2026-10-28T00:01:00Z")
+        let event = LocalSessionTelemetry.codexEvent([started, done], paneKey: "test")
+        XCTAssertEqual(event?.status, .completed)
+        XCTAssertEqual(event?.id, LocalSessionTelemetry.codexEvent([started, done, row("token_count")], paneKey: "test")?.id)
+        XCTAssertEqual(LocalSessionTelemetry.codexEvent([done, started], paneKey: "test")?.status, .working)
+        XCTAssertEqual(LocalSessionTelemetry.codexEvent([started, row("turn_aborted")], paneKey: "test")?.status, .failed)
+        XCTAssertNil(LocalSessionTelemetry.codexEvent([done, row("task_started", "invalid")], paneKey: "test"))
+    }
+    func testClaudeCompletionRequiresFinalTurnRecord() {
+        let timestamp = "2026-10-28T00:00:00Z"
+        let assistant: [String: Any] = ["type": "assistant", "timestamp": timestamp, "uuid": "assistant", "message": ["stop_reason": "end_turn"]]
+        let done: [String: Any] = ["type": "system", "subtype": "turn_duration", "timestamp": timestamp, "uuid": "done"]
+        XCTAssertEqual(LocalSessionTelemetry.claudeEvent([assistant], paneKey: "test")?.status, .working)
+        XCTAssertEqual(LocalSessionTelemetry.claudeEvent([assistant, done], paneKey: "test")?.status, .completed)
+        XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, ["type": "system", "subtype": "away_summary"]], paneKey: "test")?.status, .completed)
+        XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, ["type": "user", "timestamp": timestamp, "uuid": "next"]], paneKey: "test")?.status, .working)
+        XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, ["type": "assistant", "timestamp": timestamp, "isSidechain": true]], paneKey: "test")?.status, .completed)
+    }
     func testCodexLastRequestRatherThanLifetimeTokens() {
         let row: [String: Any] = ["type": "event_msg", "payload": ["type": "token_count", "info": ["total_token_usage": ["total_tokens": 10000000], "last_token_usage": ["total_tokens": 50000], "model_context_window": 200000]]]
         let usage = LocalSessionTelemetry.codexContext([row, ["type": "unrelated"]])

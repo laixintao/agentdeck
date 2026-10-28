@@ -11,12 +11,14 @@ final class MonitorTests: XCTestCase {
     }
     func testSilenceIsNotCompletion() {
         var monitor = Monitor()
-        let p = pane("Thinking…")
+        var p = pane("Working (esc to interrupt)")
         _ = monitor.ingest(scan([p]), events: [], now: start)
-        let result = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(46))
-        XCTAssertEqual(monitor.records[p.id]?.status, .idle)
-        XCTAssertEqual(result.map(\.status), [.idle])
-        XCTAssertFalse(result.contains { $0.status == .completed })
+        for (seconds, output) in [(2.0, "› prompt"), (46.0, ""), (300.0, "Thinking…"), (900.0, "› prompt")] {
+            p.output = output
+            let result = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(seconds))
+            XCTAssertEqual(monitor.records[p.id]?.status, .working)
+            XCTAssertTrue(result.isEmpty)
+        }
     }
     func testBusyFooterBeatsAlwaysVisibleCodexPrompt() {
         let signal = ScreenSignal.read("• Working (2m • esc to interrupt)\n\n› Ask Codex to do anything\nGPT-6", kind: .codex)
@@ -52,12 +54,16 @@ final class MonitorTests: XCTestCase {
         XCTAssertTrue(monitor.ingest(scan([p]), events: [], now: start).isEmpty)
         XCTAssertEqual(monitor.records[p.id]?.status, .idle)
     }
-    func testWorkingToPromptNotifiesExactlyOnce() {
+    func testPromptDoesNotCompleteUntilExplicitEvent() {
         var monitor = Monitor(); var p = pane("• Working (esc to interrupt)\n› prompt")
         _ = monitor.ingest(scan([p]), events: [], now: start)
         p.output = "Finished all tests.\n› prompt"
-        XCTAssertEqual(monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(2)).map(\.status), [.completed])
+        XCTAssertTrue(monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(2)).isEmpty)
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
         XCTAssertTrue(monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(4)).isEmpty)
+        let done = AgentEvent(paneKey: p.id, date: start.addingTimeInterval(5), status: .completed, summary: "Done")
+        _ = monitor.ingest(scan([p]), events: [done], now: start.addingTimeInterval(5))
+        XCTAssertEqual(monitor.records[p.id]?.status, .completed)
     }
     func testPermissionRequestAndResolution() {
         var monitor = Monitor(); var p = pane("Do you want to proceed?\n❯ 1. Yes\n2. No", kind: .claude)
@@ -71,7 +77,7 @@ final class MonitorTests: XCTestCase {
         XCTAssertEqual(ScreenSignal.read(output, kind: .claude)?.status, .working)
     }
     func testFreshHookSurvivesTrailingBusyScreen() {
-        var monitor = Monitor(); let p = pane("Working (esc to interrupt)")
+        var monitor = Monitor(); var p = pane("Working (esc to interrupt)")
         _ = monitor.ingest(scan([p]), events: [], now: start)
         let event = AgentEvent(paneKey: p.id, date: start.addingTimeInterval(2), status: .completed, summary: "Done")
         _ = monitor.ingest(scan([p]), events: [event], now: start.addingTimeInterval(2))
@@ -79,6 +85,12 @@ final class MonitorTests: XCTestCase {
         _ = monitor.ingest(scan([p]), events: [event], now: start.addingTimeInterval(4))
         XCTAssertEqual(monitor.records[p.id]?.status, .completed)
         _ = monitor.ingest(scan([p]), events: [event], now: start.addingTimeInterval(30))
+        XCTAssertEqual(monitor.records[p.id]?.status, .completed)
+        p.output = "Additional trailing output\nWorking (esc to interrupt)"
+        _ = monitor.ingest(scan([p]), events: [event], now: start.addingTimeInterval(40))
+        XCTAssertEqual(monitor.records[p.id]?.status, .completed)
+        p.output = "Terminal resized"
+        _ = monitor.ingest(scan([p]), events: [event], now: start.addingTimeInterval(50))
         XCTAssertEqual(monitor.records[p.id]?.status, .completed)
     }
     func testNewTurnAfterHookCompletion() {
@@ -109,7 +121,42 @@ final class MonitorTests: XCTestCase {
         _ = monitor.ingest(scan([p]), events: [], now: start)
         p.captureOK = false; p.output = ""
         XCTAssertTrue(monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(60)).isEmpty)
-        XCTAssertEqual(monitor.records[p.id]?.status, .unknown)
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+    }
+    func testSessionCompletionIsStableUntilANewTurnEvent() {
+        var monitor = Monitor(); var p = pane("Working (esc to interrupt)")
+        p.sessionEvent = AgentEvent(id: "start", paneKey: p.id, date: start, status: .working, summary: "Started", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start)
+        p.sessionEvent = AgentEvent(id: "done", paneKey: p.id, date: start.addingTimeInterval(10), status: .completed, summary: "Done", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(10))
+        for (index, output) in ["› prompt", "Working (esc to interrupt)", "Another repaint", ""].enumerated() {
+            p.output = output
+            _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(Double(20 + index)))
+            XCTAssertEqual(monitor.records[p.id]?.status, .completed)
+        }
+        p.sessionEvent = AgentEvent(id: "next", paneKey: p.id, date: start.addingTimeInterval(30), status: .working, summary: "Next", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(30))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+    }
+    func testOldCompletionCannotUndoNewInput() {
+        var monitor = Monitor(); var p = pane("› prompt")
+        p.sessionEvent = AgentEvent(id: "old", paneKey: p.id, date: start, status: .completed, summary: "Old", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start)
+        monitor.sentInput(p.id, now: start.addingTimeInterval(10))
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(11))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+        p.sessionEvent = AgentEvent(id: "delayed", paneKey: p.id, date: start.addingTimeInterval(5), status: .completed, summary: "Delayed old completion", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(12))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+    }
+    func testQuestionOverridesSessionStart() {
+        var monitor = Monitor(); var p = pane("Working (esc to interrupt)\nQueued follow-up inputs\n? 1 question\n⌥e to answer")
+        p.sessionEvent = AgentEvent(id: "start", paneKey: p.id, date: start, status: .working, summary: "Started", source: "session")
+        _ = monitor.ingest(scan([p]), events: [], now: start)
+        XCTAssertEqual(monitor.records[p.id]?.status, .waiting)
+        p.output = "› prompt"
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(1))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
     }
     func testPaneReuseDoesNotInheritOldCompletion() {
         var monitor = Monitor(); let old = pane(), new = pane("› prompt", pid: 21)

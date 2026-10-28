@@ -102,7 +102,7 @@ struct SettingsView: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 Text("状态如何判断").fontWeight(.semibold)
-                Text("精确事件：Agent 主动报告完成。屏幕识别：从运行提示回到输入提示符时，标记推测完成。静默：只有输出停止，不代表任务已经完成。关闭 App 不会停止任何 Agent。").foregroundStyle(DeckTheme.muted).lineSpacing(4)
+                Text("只有会话结束事件、完成 hook 或正常退出才标记完成。输出暂停、输入提示符和界面重绘不会标记完成；暂时无法读取时保留上次状态。关闭 App 不会停止任何 Agent。").foregroundStyle(DeckTheme.muted).lineSpacing(4)
                 Text("终端内容只保留在内存；事件记录仅保存状态和项目名称。支持本机 tmux 和 Hermes GUI；Context 读取实际接口、会话日志和终端状态栏。").foregroundStyle(DeckTheme.muted).lineSpacing(4)
             }
         }.font(.system(size: 12)).padding(28) }.frame(width: 625, height: 510).background(DeckTheme.background).preferredColorScheme(.dark).tint(DeckTheme.accent)

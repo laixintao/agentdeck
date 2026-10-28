@@ -59,6 +59,7 @@ public struct Pane: Codable, Identifiable, Equatable, Sendable {
     public var currentWork: String? = nil
     public var previewOutput: String? = nil
     public var reportedStatus: AgentStatus? = nil
+    public var sessionEvent: AgentEvent? = nil
     public var id: String { hermesSession.map { "hermes|\($0.profileID)|\($0.sessionID)" } ?? "\(socket)|\(serverPID)|\(paneID)|\(pid)" }
     public var location: String { hermesSession.map { "Hermes GUI · \($0.profileName)" } ?? "\(session) · \(window) · \(paneID)" }
     public var project: String { directory.isEmpty ? (hermesSession?.profileName ?? session) : URL(fileURLWithPath: directory).lastPathComponent }
@@ -102,7 +103,7 @@ public struct HermesSessionReference: Codable, Equatable, Sendable {
     public init(controlHome: String, profileID: String, sessionID: String) { self.controlHome = controlHome; self.profileID = profileID; self.sessionID = sessionID }
 }
 
-public struct AgentEvent: Codable, Identifiable, Sendable {
+public struct AgentEvent: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var paneKey: String
     public var date: Date
@@ -123,6 +124,7 @@ public struct AgentRecord: Identifiable, Sendable {
     public var statusSince: Date
     public var lastEvent: AgentEvent?
     public var lastEventID: String?
+    public var inputSentAt: Date?
     public var hasWorked = false
     public var isPresent = true
     public var id: String { pane.id }

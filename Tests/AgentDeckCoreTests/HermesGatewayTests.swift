@@ -18,9 +18,13 @@ final class HermesGatewayTests: XCTestCase {
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         try process.run()
         defer { process.terminate(); process.waitUntilExit(); try? FileManager.default.removeItem(at: home) }
-        for _ in 0..<50 {
+        for _ in 0..<200 {
             if FileManager.default.fileExists(atPath: home.appendingPathComponent("ready").path) { break }
+            if !process.isRunning { break }
             try await Task.sleep(for: .milliseconds(50))
+        }
+        guard FileManager.default.fileExists(atPath: home.appendingPathComponent("ready").path) else {
+            XCTFail("Local gateway fixture did not finish starting"); return
         }
         let gateway = HermesGateway()
         let first = await gateway.scan(home: home.path)

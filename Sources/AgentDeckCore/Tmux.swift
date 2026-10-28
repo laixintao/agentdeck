@@ -49,10 +49,18 @@ public struct Tmux: Sendable {
     public static let format = ["#{pid}", "#{session_name}", "#{window_index}", "#{pane_id}", "#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{@agentdeck_title}", "#{@agentdeck_kind}", "#{pane_dead}", "#{pane_dead_status}"].joined(separator: separator)
 
     public static func canonicalSocket(_ path: String) -> String {
-        if let resolved = realpath(path, nil) { defer { free(resolved) }; return String(cString: resolved) }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        if let parent = realpath(url.deletingLastPathComponent().path, nil) {
-            defer { free(parent) }; return String(cString: parent) + "/" + url.lastPathComponent
+        var ancestor = url.standardizedFileURL
+        var missing = [String]()
+        while true {
+            if let resolved = realpath(ancestor.path, nil) {
+                defer { free(resolved) }
+                let root = URL(fileURLWithPath: String(cString: resolved))
+                return missing.reversed().reduce(root) { $0.appendingPathComponent($1) }.path
+            }
+            guard ancestor.path != "/" else { break }
+            missing.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
         }
         return url.standardizedFileURL.path
     }

@@ -31,7 +31,6 @@ public struct ScreenSignal: Equatable, Sendable {
 
 public struct Monitor: Sendable {
     public private(set) var records: [String: AgentRecord] = [:]
-    public var quietInterval: TimeInterval = 45
     public init() {}
     public mutating func ingest(_ scan: ScanResult, events: [AgentEvent], now: Date = Date()) -> [Activity] {
         var activities = [Activity]()
@@ -43,16 +42,25 @@ public struct Monitor: Sendable {
             let changed = pane.captureOK && record.pane.output != pane.output
             record.isPresent = true; record.lastSeen = now
             if changed { record.lastChanged = now }
-            let event = newest[pane.id]
-            let freshEvent = event != nil && event?.id != record.lastEventID
+            let event = [newest[pane.id], pane.sessionEvent].compactMap { $0 }.max { $0.date < $1.date }
+            let freshEvent = event.map { candidate in
+                candidate.id != record.lastEventID
+                    && candidate.date >= (record.lastEvent?.date ?? .distantPast)
+                    && candidate.date >= (record.inputSentAt ?? .distantPast)
+            } ?? false
             if let event, freshEvent {
                 record.lastEvent = event; record.lastEventID = event.id
                 record.status = event.status; record.reason = "\(event.summary) · 精确事件"
+                record.inputSentAt = nil
+                if event.status == .working { record.hasWorked = true }
             }
             // The gateway owns execution state; terminal silence or an older completion
             // must never override a new running/waiting turn.
             if let status = pane.reportedStatus {
-                record.status = status; record.reason = "Hermes Gateway · \(status.title)"
+                if record.inputSentAt == nil || [.working, .waiting, .failed].contains(status) {
+                    record.status = status; record.reason = "Hermes Gateway · \(status.title)"
+                    record.inputSentAt = nil
+                }
             } else if freshEvent {
                 // Already applied the precise terminal hook above.
             } else if pane.dead {
@@ -61,21 +69,30 @@ public struct Monitor: Sendable {
             } else if !pane.agentRunning {
                 record.status = .offline; record.reason = "Agent 进程已退出；未收到完成信号"
             } else if !pane.captureOK {
-                record.status = .unknown; record.reason = "暂时无法读取终端；不推断任务完成"
+                record.reason = "暂时无法读取终端；保留上次状态"
             } else if let signal = ScreenSignal.read(pane.output, kind: pane.kind) {
                 if signal.status == .idle {
-                    if record.status == .working && record.hasWorked {
-                        record.status = .completed; record.reason = "运行后回到输入提示符 · 推测完成"
-                    } else if ![.completed, .failed].contains(record.status) {
+                    if [.unknown, .idle].contains(record.status) {
                         record.status = .idle; record.reason = signal.reason
+                    } else if record.status == .waiting, record.lastEvent?.status != .waiting {
+                        record.status = record.hasWorked ? .working : .idle
+                        record.reason = "确认提示已消失；等待明确的任务结束信号"
                     }
-                } else if signal.status == .waiting || !(record.lastEvent?.status == .completed && record.status == .completed && (!changed || now.timeIntervalSince(record.lastEvent!.date) < 3)) {
+                } else if signal.status == .waiting {
+                    record.status = signal.status; record.reason = signal.reason
+                } else if ![.completed, .failed].contains(record.status)
+                            || (pane.sessionEvent == nil && changed && ScreenSignal.read(record.pane.output, kind: pane.kind)?.status == .idle) {
                     record.status = signal.status; record.reason = signal.reason
                 }
-            } else if changed && existed {
+            } else if changed && existed && ![.completed, .failed, .waiting].contains(record.status) {
                 record.status = .working; record.reason = "终端正在产生新输出 · 活动检测"
-            } else if now.timeIntervalSince(record.lastChanged) >= quietInterval && ![.completed, .failed, .waiting].contains(record.status) {
-                record.status = .idle; record.reason = "\(Int(quietInterval)) 秒没有新输出；不代表完成"
+            }
+            // A live question takes priority over a simultaneous terminal start
+            // event. Gateway status remains authoritative for GUI sessions.
+            if pane.reportedStatus == nil, !pane.dead, pane.agentRunning, pane.captureOK,
+               let signal = ScreenSignal.read(pane.output, kind: pane.kind), signal.status == .waiting,
+               !freshEvent || event?.status == .working {
+                record.status = .waiting; record.reason = signal.reason
             }
             if record.status == .working { record.hasWorked = true }
             if previous != record.status { record.statusSince = now }
@@ -99,6 +116,7 @@ public struct Monitor: Sendable {
     public mutating func sentInput(_ key: String, now: Date = Date()) {
         guard var record = records[key] else { return }
         record.status = .working; record.reason = "已发送输入，等待 Agent 响应"; record.hasWorked = true; record.lastChanged = now; record.statusSince = now
+        record.inputSentAt = now
         records[key] = record
     }
 }

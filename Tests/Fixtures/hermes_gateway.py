@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import socketserver
 import struct
 import sys
 import threading
@@ -91,7 +92,16 @@ class Gateway(http.server.BaseHTTPRequestHandler):
         raise AssertionError(method)
 
 
-http = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Gateway)
+class LocalHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer normally reverse-resolves the host here. The wire fixture
+        # is loopback-only and must not depend on a runner's DNS configuration.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = 'localhost'
+        self.server_port = self.server_address[1]
+
+
+http = LocalHTTPServer(('127.0.0.1', 0), Gateway)
 threading.Thread(target=http.serve_forever, daemon=True).start()
 
 
