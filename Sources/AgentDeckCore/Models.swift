@@ -62,6 +62,8 @@ public struct Pane: Codable, Identifiable, Equatable, Sendable {
     public var sessionEvent: AgentEvent? = nil
     public var sessionID: String? = nil
     public var terminalTitle: String? = nil
+    public var agentPID: Int? = nil
+    public var agentStartedAt: String? = nil
     public var id: String { hermesSession.map { "hermes|\($0.profileID)|\($0.sessionID)" } ?? "\(socket)|\(serverPID)|\(paneID)|\(pid)" }
     public var location: String { hermesSession.map { "Hermes GUI · \($0.profileName)" } ?? "\(session) · \(window) · \(paneID)" }
     public var project: String { directory.isEmpty ? (hermesSession?.profileName ?? session) : URL(fileURLWithPath: directory).lastPathComponent }

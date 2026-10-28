@@ -142,9 +142,7 @@ final class DeckStore: NSObject, ObservableObject {
         }
         let pane = record.pane, client = tmux
         perform {
-            try client.validate(pane)
-            // Connect to the existing session and select the requested pane.
-            let command = [client.executable, "-S", pane.socket, "attach-session", "-t", pane.session, ";", "select-window", "-t", pane.paneID, ";", "select-pane", "-t", pane.paneID].map(Command.quote).joined(separator: " ")
+            let command = try client.attachCommand(to: pane)
             let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
             let result = try Command.run("/usr/bin/osascript", ["-e", "tell application \"Terminal\"\nactivate\ndo script \"\(escaped)\"\nend tell"])
             if result.status != 0 { throw DeckError.message("无法打开 Terminal：\(result.stderr)\n可使用「复制连接命令」。") }
@@ -154,8 +152,18 @@ final class DeckStore: NSObject, ObservableObject {
         if let ref = record.pane.hermesSession {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(ref.sessionID, forType: .string); return
         }
-        let command = [tmux.executable, "-S", record.pane.socket, "attach-session", "-t", record.pane.session].map(Command.quote).joined(separator: " ")
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string)
+        do {
+            let command = try tmux.attachCommand(to: record.pane)
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string)
+        } catch { actionError = error.localizedDescription }
+    }
+    func exitAgent(_ record: AgentRecord) {
+        if let ref = record.pane.hermesSession {
+            performAsync { try await self.hermesGateway.close(ref); self.showDetail = false }
+            return
+        }
+        let client = tmux, pane = record.pane
+        perform({ try client.exitAgent(pane) }) { self.showDetail = false }
     }
     private func performAsync(_ action: @escaping @MainActor () async throws -> Void) {
         guard !demo, !actionBusy else { return }

@@ -117,6 +117,10 @@ public struct Tmux: Sendable {
                 result.successfulSockets.insert(socket)
                 for line in text.components(separatedBy: "\n") {
                     guard var pane = Self.parse(line, socket: socket, processes: processes, tracked: tracked) else { continue }
+                    if !pane.dead, let agent = ProcessEntry.interactiveAgent(root: pane.pid, kind: pane.kind, entries: processes) {
+                        pane.agentPID = agent.pid
+                        pane.agentStartedAt = Self.processStart(agent.pid)
+                    }
                     if captureOutput {
                         do { pane.output = try call(["capture-pane", "-p", "-J", "-t", pane.paneID, "-S", "-120"], socket: socket) }
                         catch { pane.captureOK = false; result.errors.append("\(pane.location)：\(error.localizedDescription)") }

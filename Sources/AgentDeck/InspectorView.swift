@@ -8,6 +8,7 @@ struct InspectorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var input = ""
     @State private var confirmInterrupt = false
+    @State private var confirmExit = false
     @State private var followOutput = true
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,8 +33,12 @@ struct InspectorView: View {
                 }
                 Spacer()
                 Button { store.terminal(record) } label: {
-                    Label(record.status == .waiting ? "前往确认" : record.pane.hermesSession == nil ? "打开终端" : "打开 Hermes", systemImage: "arrow.up.forward.app")
+                    Label(record.pane.hermesSession == nil ? "打开 tmux" : "打开 Hermes", systemImage: "arrow.up.forward.app")
                 }.buttonStyle(.bordered).disabled(!record.isPresent || store.demo || store.actionBusy)
+                    .help(record.pane.hermesSession == nil ? "连接对应 socket，并定位这个 Agent 所在的 pane" : "打开 Hermes")
+                Button { confirmExit = true } label: { Image(systemName: "power") }
+                    .buttonStyle(.bordered).help("退出 Agent").accessibilityLabel("退出 Agent")
+                    .disabled(!record.isPresent || store.demo || store.actionBusy)
             }.padding(.horizontal, 26).padding(.bottom, 24)
             HStack {
                 Text("实时输出").font(.system(size: 13, weight: .medium))
@@ -69,6 +74,11 @@ struct InspectorView: View {
         }.background(DeckTheme.background).foregroundStyle(DeckTheme.text).tint(DeckTheme.accent)
             .confirmationDialog("中断当前任务？", isPresented: $confirmInterrupt) {
                 Button("中断任务", role: .destructive) { store.interrupt(record) }
+            }
+            .confirmationDialog("退出这个 Agent？", isPresented: $confirmExit) {
+                Button("退出 Agent", role: .destructive) { store.exitAgent(record) }
+            } message: {
+                Text(record.pane.hermesSession == nil ? "结束当前任务，保留 tmux pane 并回到 shell。" : "关闭当前会话，保留聊天记录。")
             }
     }
     private var canSend: Bool { record.isPresent && !record.pane.dead && record.status != .waiting && !store.actionBusy && !store.demo }

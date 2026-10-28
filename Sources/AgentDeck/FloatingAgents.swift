@@ -240,6 +240,10 @@ private struct FloatingAgentsView: View {
                     Button { onOpen(record.id) } label: {
                         AnimatedAgentIcon(kind: record.pane.kind, status: record.status, size: FloatingMetrics.icon).frame(width: FloatingMetrics.cell, height: FloatingMetrics.cell)
                     }.buttonStyle(.plain)
+                        .contextMenu {
+                            Button(record.pane.hermesSession == nil ? "打开 tmux" : "打开 Hermes") { store.terminal(record) }
+                                .disabled(store.demo || store.actionBusy)
+                        }
                         .background(GeometryReader { geometry in Color.clear.preference(key: FloatingIconFrames.self, value: [record.id: geometry.frame(in: .named("floating-panel"))]) })
                         .help("\(record.pane.title.isEmpty ? record.pane.project : record.pane.title) · \(record.status.title)")
                         .accessibilityLabel("\(record.pane.kind.title)，\(record.status.title)，打开会话")

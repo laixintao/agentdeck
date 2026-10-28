@@ -89,6 +89,11 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             return dict(execution_generation=12)
         if method in ('prompt.submit', 'session.interrupt'):
             return dict(accepted=True)
+        if method == 'session.close':
+            assert params['session_id'] == 'test-session'
+            current['status'] = 'offline'
+            state_file.write_text(json.dumps(current))
+            return dict(closed=True)
         raise AssertionError(method)
 
 

@@ -46,6 +46,10 @@ struct ContentView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 214, maximum: 310), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) {
                         ForEach(store.visible) { record in
                             AgentCard(record: record) { store.selection = record.id; store.showDetail = true }
+                                .contextMenu {
+                                    Button(record.pane.hermesSession == nil ? "打开 tmux" : "打开 Hermes") { store.terminal(record) }
+                                        .disabled(store.demo || store.actionBusy)
+                                }
                         }
                     }.padding(2).padding(.bottom, 28)
                 }.scrollIndicators(.hidden)

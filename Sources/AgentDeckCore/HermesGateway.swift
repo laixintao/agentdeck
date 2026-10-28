@@ -248,4 +248,10 @@ public actor HermesGateway {
         guard let generation = snapshot["execution_generation"] as? Int else { throw DeckError.message("无法确认 Hermes 当前任务") }
         _ = try await rpc.call("session.interrupt", ["session_id": ref.sessionID, "execution_generation": generation])
     }
+    public func close(_ ref: HermesSessionReference) async throws {
+        let identity = try HermesControl.request(home: ref.controlHome, verb: "identify")
+        let rpc = try HermesRPC(home: ref.controlHome, profileID: ref.profileID, identify: identity); defer { rpc.close() }
+        // Close the live session; do not delete its saved conversation or quit Hermes.
+        _ = try await rpc.call("session.close", ["session_id": ref.sessionID])
+    }
 }
