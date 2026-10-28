@@ -26,6 +26,41 @@ final class LocalSessionTelemetryTests: XCTestCase {
         XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, ["type": "user", "timestamp": timestamp, "uuid": "next"]], paneKey: "test")?.status, .working)
         XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, ["type": "assistant", "timestamp": timestamp, "isSidechain": true]], paneKey: "test")?.status, .completed)
     }
+    func testClaudeCompactionPreservesTheActualTurnLifecycle() {
+        let done: [String: Any] = ["type": "system", "subtype": "turn_duration", "timestamp": "2026-10-28T00:00:00Z", "uuid": "done"]
+        let prompt: [String: Any] = ["type": "user", "timestamp": "2026-10-28T00:01:00Z", "uuid": "next-prompt"]
+        let boundary: [String: Any] = ["type": "system", "subtype": "compact_boundary", "timestamp": "2026-10-28T00:02:00Z"]
+        // Idle compaction writes a synthetic user row, not a new user request.
+        for flags: [String: Any] in [["isCompactSummary": true], ["isVisibleInTranscriptOnly": true], ["isCompactSummary": true, "isVisibleInTranscriptOnly": true]] {
+            let summary = ["type": "user", "timestamp": "2026-10-28T00:02:00Z", "uuid": "summary"] as [String: Any]
+            let maintenance = [boundary, summary.merging(flags) { _, value in value }]
+            let completed = LocalSessionTelemetry.claudeEvent([done], paneKey: "test")
+            XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done] + maintenance, paneKey: "test"), completed)
+            XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done, prompt] + maintenance, paneKey: "test")?.status, .working)
+            XCTAssertNil(LocalSessionTelemetry.claudeEvent(maintenance, paneKey: "test"))
+            XCTAssertEqual(LocalSessionTelemetry.claudeEvent([done] + maintenance + [prompt], paneKey: "test")?.status, .working)
+        }
+    }
+    func testClaudeIdleCompactionDoesNotRestartTheMonitor() {
+        var pane = Pane(socket: "/tmp/fixture", serverPID: 1, session: "test", window: "0", paneID: "%0", pid: 2, command: "claude", directory: "/test", kind: .claude, output: "Finished\n❯")
+        var rows: [[String: Any]] = [["type": "system", "subtype": "turn_duration", "timestamp": "2026-10-28T00:00:00Z", "uuid": "done"]]
+        var monitor = Monitor()
+        func ingest() {
+            pane.sessionEvent = LocalSessionTelemetry.claudeEvent(rows, paneKey: pane.id)
+            _ = monitor.ingest(ScanResult(panes: [pane], errors: [], successfulSockets: [pane.socket], socketCount: 1), events: [])
+        }
+        ingest()
+        XCTAssertEqual(monitor.records[pane.id]?.status, .completed)
+        rows.append(["type": "user", "timestamp": "2026-10-28T00:01:00Z", "uuid": "summary", "isCompactSummary": true, "isVisibleInTranscriptOnly": true])
+        pane.output = "Compacted while idle, before the prompt cache expired\n❯"
+        ingest()
+        XCTAssertEqual(monitor.records[pane.id]?.status, .completed)
+        ingest()
+        XCTAssertEqual(monitor.records[pane.id]?.status, .completed)
+        rows.append(["type": "user", "timestamp": "2026-10-28T00:02:00Z", "uuid": "new-request"])
+        ingest()
+        XCTAssertEqual(monitor.records[pane.id]?.status, .working)
+    }
     func testCodexLastRequestRatherThanLifetimeTokens() {
         let row: [String: Any] = ["type": "event_msg", "payload": ["type": "token_count", "info": ["total_token_usage": ["total_tokens": 10000000], "last_token_usage": ["total_tokens": 50000], "model_context_window": 200000]]]
         let usage = LocalSessionTelemetry.codexContext([row, ["type": "unrelated"]])

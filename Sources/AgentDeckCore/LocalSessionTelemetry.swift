@@ -60,6 +60,10 @@ public enum LocalSessionTelemetry {
     }
     public static func claudeEvent(_ rows: [[String: Any]], paneKey: String) -> AgentEvent? {
         for row in rows.reversed() where row["isSidechain"] as? Bool != true && row["isMeta"] as? Bool != true {
+            // Claude can compact an already finished turn while idle. Its summary
+            // is stored as a user message, but must not start another turn.
+            guard row["isCompactSummary"] as? Bool != true,
+                  row["isVisibleInTranscriptOnly"] as? Bool != true else { continue }
             let type = row["type"] as? String
             let status: AgentStatus
             if type == "system", row["subtype"] as? String == "turn_duration" { status = .completed }

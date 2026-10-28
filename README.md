@@ -43,6 +43,8 @@ open dist/AgentDeck.app
 
 完成只依据明确事件：Codex `task_complete`、Claude `turn_duration`、完成 hook、Hermes Gateway 完成事件，或 Agent 正常退出。单个工具完成、Claude 的一条 `end_turn` 回复都不等于整个任务结束。无法精确关联会话日志时保留运行 / 未知状态，不猜测完成；已经完成后，普通输出变化不会重新触发运行状态。
 
+Claude 在空闲时自动压缩上下文产生的摘要和仅供 transcript 展示的消息，不视为新任务，保留之前的任务状态。
+
 Codex 的 `Queued follow-up inputs` 中有待回答 question 时，即使同时显示 `Working`，图标也显示等待回答；回答后随终端状态恢复。
 
 ## Context 与实时输出
