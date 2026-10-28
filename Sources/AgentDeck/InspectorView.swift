@@ -35,7 +35,7 @@ struct InspectorView: View {
                 Button { store.terminal(record) } label: {
                     Label(record.pane.hermesSession == nil ? "打开 tmux" : "打开 Hermes", systemImage: "arrow.up.forward.app")
                 }.buttonStyle(.bordered).disabled(!record.isPresent || store.demo || store.actionBusy)
-                    .help(record.pane.hermesSession == nil ? "连接对应 socket，并定位这个 Agent 所在的 pane" : "打开 Hermes")
+                    .help(record.pane.hermesSession == nil ? "优先在已有终端定位这个 Agent 所在的 pane" : "打开 Hermes")
                 Button { confirmExit = true } label: { Image(systemName: "power") }
                     .buttonStyle(.bordered).help("退出 Agent").accessibilityLabel("退出 Agent")
                     .disabled(!record.isPresent || store.demo || store.actionBusy)

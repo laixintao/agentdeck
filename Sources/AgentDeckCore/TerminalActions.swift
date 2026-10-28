@@ -1,7 +1,34 @@
 import Foundation
 import Darwin
 
+public struct TmuxClient: Equatable, Sendable {
+    public var pid: Int
+    public var name: String
+    public var tty: String
+    public var sessionID: String
+    public var paneID: String
+    public var activity: Int
+    public var created: Int
+
+    static func parse(_ line: String) -> Self? {
+        let fields = line.components(separatedBy: Tmux.separator)
+        guard fields.count == 9, let pid = Int(fields[0]), pid > 1,
+              !fields[1].isEmpty, fields[2].hasPrefix("/dev/"),
+              let activity = Int(fields[5]), let created = Int(fields[6]),
+              fields[7] == "0", !fields[8].split(separator: ",").contains("suspended") else { return nil }
+        return Self(pid: pid, name: fields[1], tty: fields[2], sessionID: fields[3], paneID: fields[4], activity: activity, created: created)
+    }
+}
+
 extension ProcessEntry {
+    public static func ancestors(of pid: Int, entries: [Self]) -> [Int] {
+        let parents = Dictionary(entries.map { ($0.pid, $0.parent) }, uniquingKeysWith: { first, _ in first })
+        var current = pid, seen = Set<Int>(), result = [Int]()
+        while current > 1, seen.insert(current).inserted, let parent = parents[current] {
+            result.append(current); current = parent
+        }
+        return result
+    }
     static func interactiveAgent(root: Int, kind: AgentKind, entries: [Self]) -> Self? {
         if kind == .custom { return entries.first { $0.pid == root } }
         var pending = [root], seen = Set<Int>(), candidates = [Self]()
@@ -34,15 +61,40 @@ extension Tmux {
     }
 
     public func attachCommand(to pane: Pane) throws -> String {
+        let session = try sessionID(for: pane)
+        // switch-client accepts a pane target and selects its session, window AND
+        // pane. Use the session ID so renamed/prefix-matching names cannot misroute.
+        return ["/usr/bin/env", "-u", "TMUX", "-u", "TMUX_PANE", executable, "-S", pane.socket,
+                "attach-session", "-t", session, ";", "switch-client", "-t", pane.paneID]
+            .map(Command.quote).joined(separator: " ")
+    }
+
+    private func sessionID(for pane: Pane) throws -> String {
         let identity = try call(["display-message", "-p", "-t", pane.paneID, "#{pid}|#{pane_pid}|#{session_id}"], socket: pane.socket)
             .trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "|")
         guard identity.count == 3, identity[0] == String(pane.serverPID), identity[1] == String(pane.pid),
               identity[2].hasPrefix("$"), Int(identity[2].dropFirst()) != nil else { throw DeckError.message("这个 pane 已被替换，请刷新后重试。") }
-        // switch-client accepts a pane target and selects its session, window AND
-        // pane. Use the session ID so renamed/prefix-matching names cannot misroute.
-        return ["/usr/bin/env", "-u", "TMUX", "-u", "TMUX_PANE", executable, "-S", pane.socket,
-                "attach-session", "-t", identity[2], ";", "switch-client", "-t", pane.paneID]
-            .map(Command.quote).joined(separator: " ")
+        return identity[2]
+    }
+
+    public func attachedClients(for pane: Pane) throws -> [TmuxClient] {
+        let session = try sessionID(for: pane)
+        let format = ["#{client_pid}", "#{client_name}", "#{client_tty}", "#{session_id}", "#{pane_id}", "#{client_activity}", "#{client_created}", "#{client_control_mode}", "#{client_flags}"].joined(separator: Self.separator)
+        return try call(["list-clients", "-F", format], socket: pane.socket).split(separator: "\n")
+            .compactMap { TmuxClient.parse(String($0)) }.sorted {
+                let left = $0.paneID == pane.paneID ? 0 : ($0.sessionID == session ? 1 : 2)
+                let right = $1.paneID == pane.paneID ? 0 : ($1.sessionID == session ? 1 : 2)
+                if left != right { return left < right }
+                if $0.activity != $1.activity { return $0.activity > $1.activity }
+                return $0.pid < $1.pid
+            }
+    }
+
+    public func select(_ pane: Pane, in client: TmuxClient) throws {
+        guard try attachedClients(for: pane).contains(where: {
+            $0.pid == client.pid && $0.name == client.name && $0.tty == client.tty && $0.created == client.created
+        }) else { throw DeckError.message("原来的 tmux client 已断开或被替换，请重试。") }
+        _ = try call(["switch-client", "-c", client.name, "-t", pane.paneID], socket: pane.socket)
     }
 
     public func exitAgent(_ pane: Pane) throws {

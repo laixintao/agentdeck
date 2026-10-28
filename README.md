@@ -31,7 +31,7 @@ open dist/AgentDeck.app
 
 `⌘,` 打开设置。点击卡片标题查看完整输出、发送消息、中断任务或打开原应用。主界面预览和详情支持文本选择；详情可以暂停跟随输出。
 
-- **打开 tmux**：在 Terminal 中启动 client，连接这个 Agent 的 socket 并定位到准确的 session、window 和 pane。卡片和悬浮图标的右键菜单也有这个入口；复制连接命令同样定位到 pane。
+- **打开 tmux**：优先复用同一 socket 已连接的本地终端 client，切到准确的 session、window 和 pane，并聚焦原来的终端。Ghostty、Terminal 和 iTerm2 按 TTY 定位标签页；多个 client 时优先选已显示目标 pane / session 的，再按最近使用时间选择。没有可复用的本地 client 时才新开 Terminal。卡片和悬浮图标的右键菜单也有这个入口；复制连接命令仍可另开 client。
 - **退出 Agent**：点击详情中的电源按钮，确认后先中断任务，再退出该 Agent 的进程，保留 tmux pane 并回到 shell。直接占用 pane 根进程的 Agent 退出后会在原 pane 恢复默认 shell。不结束 tmux server、共享 Codex daemon 或其他 Agent；进程身份已变化时拒绝退出。Hermes GUI 使用会话关闭接口，保留聊天记录。
 
 ## 状态与图标
@@ -109,7 +109,7 @@ agentdeckctl event --state failed
 
 终端约 120 行历史、最多 2 MB 会话日志尾部和 Hermes 有界事件输出仅在内存中处理。`~/Library/Application Support/AgentDeck/events` 的无正文状态事件保留 7 天，`state.json` 仅保存事件去重游标；不生成通知历史。
 
-终端发送使用独立的 tmux buffer 和 bracketed paste，等待粘贴处理后单独发送 Enter，以提交新消息。不会改动系统剪贴板或已有 tmux buffer。拒绝控制字符 / 多行文本；输入前及提交前复核进程身份，避免发到已退出 Agent 的 shell。发送失败保留输入框里的消息。「打开终端」通过 AppleScript 调用 Terminal，可能需要 macOS 自动化授权，也可复制连接命令手动使用其他终端。远程 SSH 和其他桌面 Agent 暂不支持。
+终端发送使用独立的 tmux buffer 和 bracketed paste，等待粘贴处理后单独发送 Enter，以提交新消息。不会改动系统剪贴板或已有 tmux buffer。拒绝控制字符 / 多行文本；输入前及提交前复核进程身份，避免发到已退出 Agent 的 shell。发送失败保留输入框里的消息。「打开 tmux」通过终端的 AppleScript 接口聚焦原标签页，可能需要 macOS 自动化授权；其他终端会激活所属应用。远程 SSH 与 control-mode client 不用于窗口复用。也可复制连接命令手动使用其他终端。
 
 ## 版本发布
 

@@ -144,12 +144,7 @@ final class DeckStore: NSObject, ObservableObject {
             actionError = "Hermes GUI 未运行。请打开 Hermes 后选择这个会话。"; return
         }
         let pane = record.pane, client = tmux
-        perform {
-            let command = try client.attachCommand(to: pane)
-            let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-            let result = try Command.run("/usr/bin/osascript", ["-e", "tell application \"Terminal\"\nactivate\ndo script \"\(escaped)\"\nend tell"])
-            if result.status != 0 { throw DeckError.message("无法打开 Terminal：\(result.stderr)\n可使用「复制连接命令」。") }
-        }
+        performAsync { try await TerminalNavigation.open(pane, using: client) }
     }
     func copyAttach(_ record: AgentRecord) {
         if let ref = record.pane.hermesSession {
