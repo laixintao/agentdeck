@@ -91,7 +91,7 @@ final class HermesGatewayTests: XCTestCase {
             XCTAssertTrue(excluded.panes.isEmpty, "Do not add unrelated \(source) sessions")
         }
         try setState("idle", messageCount: 2, source: "local")
-        let clock = Date()
+        let clock = Date(timeIntervalSince1970: 1_800_000_000)
         let old = clock.addingTimeInterval(-700)
         let timedGateway = HermesGateway()
         var monitor = Monitor()
