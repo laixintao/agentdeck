@@ -136,8 +136,10 @@ public actor HermesGateway {
                     let rpc = try HermesRPC(home: expanded, profileID: profileID, identify: identity); defer { rpc.close() }
                     let response = try await rpc.call("session.active_list")
                     for row in response["sessions"] as? [[String: Any]] ?? [] {
-                        // Tmux CLI sessions are already represented by the terminal adapter.
-                        guard let sessionID = row["id"] as? String, ["desktop", "gui", "web", "tui"].contains(row["source"] as? String ?? "") else { continue }
+                        // Current gateways normalize desktop sessions to "local" after a
+                        // turn starts. The creation label is not retained in this feed.
+                        // Explicit CLI rows are already represented by the terminal adapter.
+                        guard let sessionID = row["id"] as? String, ["desktop", "gui", "web", "tui", "local"].contains(row["source"] as? String ?? "") else { continue }
                         // Desktop can retain empty tabs as active sessions. Only hide an
                         // explicitly empty, idle session; a starting task may have no messages yet.
                         if row["message_count"] as? Int == 0, row["status"] as? String == "idle" { continue }

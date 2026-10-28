@@ -7,8 +7,8 @@ final class HermesGatewayTests: XCTestCase {
         let home = URL(fileURLWithPath: "/private/tmp/ad-gw-" + String(UUID().uuidString.prefix(8)))
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         let stateURL = home.appendingPathComponent("fixture-state.json")
-        func setState(_ status: String, epoch: String = "epoch-one", messageCount: Int? = nil) throws {
-            var value: [String: Any] = ["status": status, "epoch": epoch]
+        func setState(_ status: String, epoch: String = "epoch-one", messageCount: Int? = nil, source: String = "desktop") throws {
+            var value: [String: Any] = ["status": status, "epoch": epoch, "source": source]
             if let messageCount { value["message_count"] = messageCount }
             try JSONSerialization.data(withJSONObject: value).write(to: stateURL, options: .atomic)
         }
@@ -68,6 +68,27 @@ final class HermesGatewayTests: XCTestCase {
         try setState("idle", messageCount: 2)
         let withHistory = await gateway.scan(home: home.path)
         XCTAssertEqual(withHistory.panes.count, 1, "An idle session with messages must remain visible")
+        // Hermes rewrites the creation source to "local" when a desktop turn
+        // starts. Keep the same agent visible across that transition.
+        for (state, expected) in [("working", AgentStatus.working), ("waiting", .waiting), ("idle", .completed)] {
+            try setState(state, messageCount: 2, source: "local")
+            let normalized = await gateway.scan(home: home.path)
+            XCTAssertTrue(normalized.errors.isEmpty)
+            let local = try XCTUnwrap(normalized.panes.first)
+            XCTAssertEqual(local.id, pane.id)
+            XCTAssertEqual(local.reportedStatus, expected)
+            XCTAssertEqual(local.contextUsage?.percent, 25)
+            XCTAssertFalse(local.output.isEmpty)
+        }
+        try setState("idle", messageCount: 0, source: "local")
+        let emptyLocal = await gateway.scan(home: home.path)
+        XCTAssertTrue(emptyLocal.panes.isEmpty, "Empty normalized tabs stay hidden")
+        for source in ["cli", "cron", "tool", "oneshot"] {
+            try setState("working", messageCount: 2, source: source)
+            let excluded = await gateway.scan(home: home.path)
+            XCTAssertTrue(excluded.panes.isEmpty, "Do not add unrelated \(source) sessions")
+        }
+        try setState("idle", messageCount: 2, source: "local")
         let ref = try XCTUnwrap(pane.hermesSession)
         try await gateway.send("literal $(do-not-execute)", to: ref)
         try await gateway.interrupt(ref)

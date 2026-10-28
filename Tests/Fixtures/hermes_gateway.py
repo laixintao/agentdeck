@@ -71,7 +71,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             log.write(json.dumps(request) + '\n')
         epoch = current.get('epoch', 'epoch-one')
         if method == 'session.active_list':
-            rows = [] if current['status'] == 'offline' else [dict(id='test-session', source='desktop', title='Fixture task', status=current['status'])]
+            rows = [] if current['status'] == 'offline' else [dict(id='test-session', source=current.get('source', 'desktop'), title='Fixture task', status=current['status'])]
             if rows and 'message_count' in current:
                 rows[0]['message_count'] = current['message_count']
             return dict(sessions=rows)

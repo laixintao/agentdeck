@@ -63,6 +63,8 @@ Codex 的 `Queued follow-up inputs` 中有待回答 question 时，即使同时�
 
 默认读取 `~/.hermes/gateway.sock` 或其私有路径指针，校验权限和同用户 socket 对端，通过短期 ticket 连接 Gateway 的 loopback WebSocket。
 
+兼容 Gateway 将桌面会话的来源从 `gui` / `desktop` 归一化为 `local` 的行为；任务开始后仍持续跟踪同一个会话。
+
 - `session.active_list` 发现活跃会话与工作 / 等待状态。
 - 不展示接口明确报告「没有消息且空闲」的 GUI 空会话；刚开始工作或等待回答的会话即使消息数为零也保留。只过滤显示，不关闭或删除 Hermes 会话。
 - `session.stats`、`session.events.since` 获取 Context、工具调用、输出及完成事件。
