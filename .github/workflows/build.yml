@@ -1,0 +1,65 @@
+name: Build and test macOS
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Workflow validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Check Actions with actionlint
+        run: docker run --rm --volume "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
+
+  macos:
+    needs: lint
+    name: macOS / ${{ matrix.release_arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            release_arch: arm64
+          - runner: macos-15-intel
+            release_arch: x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Install test and release tools
+        run: |
+          command -v tmux >/dev/null || brew install tmux
+          python3 -m venv .venv-release
+          .venv-release/bin/pip install -r requirements-release.txt
+          echo "$PWD/.venv-release/bin" >> "$GITHUB_PATH"
+      - name: Test and package
+        env:
+          RELEASE_ARCH: ${{ matrix.release_arch }}
+        run: make ci-package
+      - name: Upload verified package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-${{ matrix.release_arch }}
+          path: |
+            dist/releases/*.dmg
+            dist/releases/*.zip
+            dist/releases/checksums-*.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

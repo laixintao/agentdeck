@@ -1,0 +1,14 @@
+.build/
+dist/
+.DS_Store
+.swiftpm/
+artifacts/
+Resources/AgentDeck.iconset/
+__pycache__/
+.venv-release/
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.key
