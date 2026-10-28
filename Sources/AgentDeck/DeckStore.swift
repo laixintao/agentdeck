@@ -53,10 +53,10 @@ final class DeckStore: NSObject, ObservableObject {
         if hasAppBundle { return Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/agentdeckctl").path }
         return URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("agentdeckctl").path
     }
-    var live: [AgentRecord] { records.filter { $0.isPresent && $0.status != .offline } }
+    var live: [AgentRecord] { records.filter { $0.isVisible(at: lastRefresh ?? Date()) } }
     var selected: AgentRecord? { records.first { $0.id == selection } }
     var visible: [AgentRecord] {
-        records.filter { $0.isPresent && $0.status != .offline }.sorted {
+        live.sorted {
             let order: [AgentStatus: Int] = [.waiting: 0, .working: 1, .failed: 2, .completed: 3, .idle: 4, .unknown: 5, .offline: 6]
             let a = order[$0.status] ?? 7, b = order[$1.status] ?? 7
             return a == b ? $0.id.localizedStandardCompare($1.id) == .orderedAscending : a < b
@@ -84,8 +84,11 @@ final class DeckStore: NSObject, ObservableObject {
         if !loadedEvents { seen.formIntersection(Set(events.map(\.id))); loadedEvents = true }
         seen.formUnion(incoming.map(\.id))
         if !incoming.isEmpty { persist() }
-        if selection == nil { selection = visible.first?.id }
-        lastRefresh = Date(); refreshing = false
+        lastRefresh = Date()
+        if !visible.contains(where: { $0.id == selection }) {
+            showDetail = false; selection = visible.first?.id
+        }
+        refreshing = false
     }
     func persist() {
         guard !demo else { return }

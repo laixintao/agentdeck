@@ -116,9 +116,10 @@ public struct HermesGatewayScan: Sendable {
 public actor HermesGateway {
     private struct Cursor { var epoch: String; var sequence: Int; var output: String = ""; var work: String = ""; var status: AgentStatus?; var context: ContextUsage? }
     private var cursors: [String: Cursor] = [:]
+    private var activity: [String: HermesActivity.Observation] = [:]
     private var knownSources: Set<String> = []
     public init() {}
-    public func scan(home: String) async -> HermesGatewayScan {
+    public func scan(home: String, now: Date = Date()) async -> HermesGatewayScan {
         var result = HermesGatewayScan()
         let expanded = (home as NSString).expandingTildeInPath
         let exists = ["gateway.sock", "gateway.sock.path"].contains { FileManager.default.fileExists(atPath: expanded + "/" + $0) }
@@ -135,7 +136,9 @@ public actor HermesGateway {
                 do {
                     let rpc = try HermesRPC(home: expanded, profileID: profileID, identify: identity); defer { rpc.close() }
                     let response = try await rpc.call("session.active_list")
-                    for row in response["sessions"] as? [[String: Any]] ?? [] {
+                    let rows = response["sessions"] as? [[String: Any]] ?? []
+                    let savedDates = HermesActivity.savedDates(profile: profileID, sessionIDs: rows.compactMap { $0["id"] as? String }, now: now)
+                    for row in rows {
                         // Current gateways normalize desktop sessions to "local" after a
                         // turn starts. The creation label is not retained in this feed.
                         // Explicit CLI rows are already represented by the terminal adapter.
@@ -151,6 +154,8 @@ public actor HermesGateway {
                         let stats = try await rpc.call("session.stats", ["session_id": sessionID])
                         pane.contextUsage = Self.context(stats)
                         var cursor = cursors[pane.id]
+                        let previousCursor = cursor
+                        var newInteraction = false
                         var params: [String: Any] = ["session_id": sessionID, "last_sequence": cursor?.sequence ?? 0]
                         if let cursor { params["replay_epoch"] = cursor.epoch }
                         var replay = try await rpc.call("session.events.since", params)
@@ -167,6 +172,11 @@ public actor HermesGateway {
                         for frame in replay["events"] as? [[String: Any]] ?? [] {
                             let event = frame["params"] as? [String: Any] ?? frame
                             let type = event["type"] as? String ?? "", payload = event["payload"] as? [String: Any] ?? [:]
+                            // An initial replay (including after a gateway restart) is
+                            // historical output, not new activity observed just now.
+                            if let previousCursor, previousCursor.epoch == cursor?.epoch,
+                               let sequence = event["seq"] as? Int, sequence > previousCursor.sequence,
+                               HermesActivity.isInteraction(type) { newInteraction = true }
                             if let work = Self.work(type: type, payload: payload) { cursor?.work = work }
                             if let text = Self.output(type: type, payload: payload), !text.isEmpty {
                                 let output = String(((cursor?.output ?? "") + text).suffix(24000)); cursor?.output = output
@@ -183,6 +193,14 @@ public actor HermesGateway {
                         }
                         let nextSequence = replay["last_sequence"] as? Int ?? cursor?.sequence ?? 0
                         cursor?.sequence = nextSequence
+                        let status = pane.reportedStatus ?? .unknown
+                        let saved = savedDates[sessionID]
+                            ?? HermesActivity.date(row["last_active"], now: now)
+                            ?? HermesActivity.date(row["started_at"], now: now)
+                        var observation = activity[pane.id] ?? HermesActivity.Observation(date: saved ?? now, status: status, messageCount: row["message_count"] as? Int)
+                        observation.update(saved: saved, status: status, messageCount: row["message_count"] as? Int, newEvent: newInteraction, now: now)
+                        activity[pane.id] = observation
+                        pane.lastInteractionAt = observation.date
                         if pane.reportedStatus == .idle, let completed = cursor?.status, [.completed, .failed].contains(completed) { pane.reportedStatus = completed }
                         if let context = pane.contextUsage { cursor?.context = context }
                         pane.contextUsage = pane.contextUsage ?? cursor?.context
@@ -242,6 +260,7 @@ public actor HermesGateway {
         let rpc = try HermesRPC(home: ref.controlHome, profileID: ref.profileID, identify: identity); defer { rpc.close() }
         _ = try await rpc.call("session.resume", ["session_id": ref.sessionID])
         _ = try await rpc.call("prompt.submit", ["session_id": ref.sessionID, "submission_id": UUID().uuidString, "text": text])
+        activity["hermes|\(ref.profileID)|\(ref.sessionID)"]?.date = Date()
     }
     public func interrupt(_ ref: HermesSessionReference) async throws {
         let identity = try HermesControl.request(home: ref.controlHome, verb: "identify")

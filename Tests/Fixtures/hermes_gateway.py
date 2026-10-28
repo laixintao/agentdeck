@@ -74,6 +74,8 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             rows = [] if current['status'] == 'offline' else [dict(id='test-session', source=current.get('source', 'desktop'), title='Fixture task', status=current['status'])]
             if rows and 'message_count' in current:
                 rows[0]['message_count'] = current['message_count']
+            if rows and 'last_active' in current:
+                rows[0]['last_active'] = current['last_active']
             return dict(sessions=rows)
         if method == 'session.stats':
             return dict(context_tokens=32000, context_length=128000, total_tokens=9000000)
@@ -81,6 +83,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             frames = [event(1, 'message.start', {}, epoch), event(2, 'tool.start', dict(name='terminal', args=dict(command='swift test')), epoch)]
             if current['status'] == 'idle':
                 frames.append(event(3, 'message.complete', dict(text='All tests passed', status='complete', error=None), epoch))
+            frames = current.get('events', frames)
             latest = frames[-1]['seq']
             missing = params.get('replay_epoch') != epoch
             return dict(replay_epoch=epoch, last_sequence=latest, snapshot_required=missing,

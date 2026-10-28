@@ -64,6 +64,7 @@ public struct Pane: Codable, Identifiable, Equatable, Sendable {
     public var terminalTitle: String? = nil
     public var agentPID: Int? = nil
     public var agentStartedAt: String? = nil
+    public var lastInteractionAt: Date? = nil
     public var id: String { hermesSession.map { "hermes|\($0.profileID)|\($0.sessionID)" } ?? "\(socket)|\(serverPID)|\(paneID)|\(pid)" }
     public var location: String { hermesSession.map { "Hermes GUI · \($0.profileName)" } ?? "\(session) · \(window) · \(paneID)" }
     public var project: String { directory.isEmpty ? (hermesSession?.profileName ?? session) : URL(fileURLWithPath: directory).lastPathComponent }
@@ -134,6 +135,12 @@ public struct AgentRecord: Identifiable, Sendable {
     public var isPresent = true
     public var id: String { pane.id }
     public init(pane: Pane, now: Date) { self.pane = pane; lastSessionID = pane.sessionID; lastChanged = now; lastSeen = now; statusSince = now }
+    public func isVisible(at now: Date) -> Bool {
+        guard isPresent, status != .offline else { return false }
+        guard pane.kind == .hermes else { return true }
+        let interaction = max(pane.lastInteractionAt ?? lastChanged, inputSentAt ?? .distantPast)
+        return now.timeIntervalSince(interaction) < HermesActivity.visibilityInterval
+    }
 }
 
 public struct Activity: Codable, Identifiable, Sendable {

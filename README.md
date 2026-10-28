@@ -67,6 +67,7 @@ Codex 的 `Queued follow-up inputs` 中有待回答 question 时，即使同时�
 
 - `session.active_list` 发现活跃会话与工作 / 等待状态。
 - 不展示接口明确报告「没有消息且空闲」的 GUI 空会话；刚开始工作或等待回答的会话即使消息数为零也保留。只过滤显示，不关闭或删除 Hermes 会话。
+- Hermes 连续 10 分钟没有消息或实际活动时，从主界面和悬浮图标隐藏；新交互后自动恢复。计时读取本地 `state.db` 中对应会话的活动 / 消息时间，并跟踪新消息、工具及确认事件；轮询、用量刷新和历史事件重放不重置计时。仅影响显示，不改变会话状态，也不关闭或删除会话。
 - `session.stats`、`session.events.since` 获取 Context、工具调用、输出及完成事件。
 - 被动扫描不 attach、不刷新策略，也不启动或重启 Hermes。
 - 用户发送 / 中断时才调用 `session.resume`，再调用 `prompt.submit` 或带当前 execution generation 的 `session.interrupt`。
