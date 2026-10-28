@@ -31,7 +31,9 @@ open dist/AgentDeck.app
 
 `⌘,` 打开设置。点击卡片标题查看完整输出、发送消息、中断任务或打开原应用。主界面预览和详情支持文本选择；详情可以暂停跟随输出。
 
-- **打开 tmux**：优先复用同一 socket 已连接的本地终端 client，切到准确的 session、window 和 pane，并聚焦原来的终端。Ghostty、Terminal 和 iTerm2 按 TTY 定位标签页；多个 client 时优先选已显示目标 pane / session 的，再按最近使用时间选择。没有可复用的本地 client 时才新开 Terminal。卡片和悬浮图标的右键菜单也有这个入口；复制连接命令仍可另开 client。
+左下角悬浮图标：悬停查看名字、工作目录、最新输出、状态和 Context；单击直接定位原终端的 tmux pane（Hermes GUI 打开 Hermes），右键可查看详情。预览随输出更新，拖动图标仍只移动悬浮条。
+
+- **打开 tmux**：优先复用同一 socket 已连接的本地终端 client，切到准确的 session、window 和 pane，并聚焦原来的终端。Ghostty、Terminal 和 iTerm2 按 TTY 定位标签页；多个 client 时优先选已显示目标 pane / session 的，再按最近使用时间选择。没有可复用的本地 client 时才新开 Terminal。卡片的右键菜单也有这个入口；复制连接命令仍可另开 client。
 - **退出 Agent**：点击详情中的电源按钮，确认后先中断任务，再退出该 Agent 的进程，保留 tmux pane 并回到 shell。直接占用 pane 根进程的 Agent 退出后会在原 pane 恢复默认 shell。不结束 tmux server、共享 Codex daemon 或其他 Agent；进程身份已变化时拒绝退出。Hermes GUI 使用会话关闭接口，保留聊天记录。
 
 ## 状态与图标

@@ -136,15 +136,19 @@ final class DeckStore: NSObject, ObservableObject {
         let client = tmux, pane = record.pane
         perform { try client.interrupt(pane) }
     }
-    func terminal(_ record: AgentRecord) {
+    func terminal(_ record: AgentRecord, revealErrors: Bool = false) {
         if record.pane.hermesSession != nil {
             if let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == "Hermes" }) {
                 app.activate(options: []); return
             }
-            actionError = "Hermes GUI 未运行。请打开 Hermes 后选择这个会话。"; return
+            actionError = "Hermes GUI 未运行。请打开 Hermes 后选择这个会话。"
+            if revealErrors { openMain() }; return
         }
         let pane = record.pane, client = tmux
-        performAsync { try await TerminalNavigation.open(pane, using: client) }
+        performAsync {
+            do { try await TerminalNavigation.open(pane, using: client) }
+            catch { if revealErrors { self.openMain() }; throw error }
+        }
     }
     func copyAttach(_ record: AgentRecord) {
         if let ref = record.pane.hermesSession {

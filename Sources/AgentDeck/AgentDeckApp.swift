@@ -33,7 +33,11 @@ struct AgentDeckApp: App {
         let path = CommandLine.arguments[index + 1]
         func capture(_ destination: String) {
             let floating = CommandLine.arguments.contains("--snapshot-floating")
-            if floating { store.floatingController?.saveSnapshot(to: URL(fileURLWithPath: destination)); return }
+            if floating {
+                if CommandLine.arguments.contains("--snapshot-floating-preview") { store.floatingController?.savePreviewSnapshot(to: URL(fileURLWithPath: destination)) }
+                else { store.floatingController?.saveSnapshot(to: URL(fileURLWithPath: destination)) }
+                return
+            }
             guard let window = NSApp.windows.first(where: { floating ? $0.identifier?.rawValue == "AgentDeck.floating" : $0.title == "AgentDeck" && $0.frame.width > 800 }), let view = (window.attachedSheet ?? window).contentView,
                   let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: bitmap)
