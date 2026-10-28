@@ -41,7 +41,7 @@ open dist/AgentDeck.app
 
 遵循 macOS「减少动态效果」及「减少透明度」。约每 2 秒读取一次状态。输出暂停、回到输入提示符或界面重绘不会标记完成，也不会让工作状态因静默变为空闲。连接暂时失败保留上次状态，错误在设置中展示。
 
-完成只依据明确事件：Codex `task_complete`、Claude `turn_duration`、完成 hook、Hermes Gateway 完成事件，或 Agent 正常退出。单个工具完成、Claude 的一条 `end_turn` 回复都不等于整个任务结束。无法精确关联会话日志时保留运行 / 未知状态，不猜测完成；已经完成后，普通输出变化不会重新触发运行状态。
+完成只依据明确事件：Codex `task_complete`、Claude `turn_duration`、完成 hook、Hermes Gateway 完成事件，或 Agent 正常退出。单个工具完成、Claude 的一条 `end_turn` 回复都不等于整个任务结束。无法精确关联会话日志时保留运行 / 未知状态，不猜测完成；已经完成后，普通输出变化不会重新触发运行状态。Codex 已关联的当前会话事件优先于 pane 级 hook（未关联时回退到 hook），避免旧会话的延迟 hook 覆盖新任务。
 
 Claude 在空闲时自动压缩上下文产生的摘要和仅供 transcript 展示的消息，不视为新任务，保留之前的任务状态。
 
@@ -49,7 +49,7 @@ Codex 的 `Queued follow-up inputs` 中有待回答 question 时，即使同时�
 
 ## Context 与实时输出
 
-- **Codex**：根据 pane 进程树和进程实际打开的 rollout 文件关联会话，读取 `last_token_usage.total_tokens / model_context_window`。不按共享目录猜测归属，不使用累计消耗。
+- **Codex**：优先用终端当前会话标题和工作目录唯一匹配本机只读会话索引，并校验 rollout 日志中的会话 ID 和目录，支持多个终端共享 app-server daemon。旧版 CLI 可回退到交互进程直接打开的唯一 rollout 文件，不读取共享后台服务或嵌套 agent 的文件来猜测归属。重名、日志缺失或索引不一致时不匹配。读取 `last_token_usage.total_tokens / model_context_window`，不使用累计消耗。
 - **Claude**：根据 PID 注册文件、UTC 进程启动时间和 session ID 关联 transcript。用量为最近一次输入 token，包含 cache read / creation；上限读取本机当前模型目录的 `runtime.max_input_tokens`，尊重进程 context 上限配置。上限不可用时仍显示已用 token 数。预览读取文本和工具调用，不展示 thinking 数据。
 - **Hermes GUI**：使用 `session.stats` 的 `context_tokens / context_length`，可回退到输出事件中的 `context_used / context_max`。
 - 终端还支持显式状态栏：`81% context left`、`Context: 42% used`、`Context: 32k / 128k`。完全缺少数据时显示 `—`，悬浮提示说明来源。

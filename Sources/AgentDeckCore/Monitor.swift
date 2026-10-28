@@ -38,11 +38,18 @@ public struct Monitor: Sendable {
         for pane in scan.panes {
             let existed = records[pane.id] != nil
             var record = records[pane.id] ?? AgentRecord(pane: pane, now: now)
+            if let previousSession = record.lastSessionID, let currentSession = pane.sessionID, previousSession != currentSession {
+                record = AgentRecord(pane: pane, now: now)
+            }
+            if let sessionID = pane.sessionID { record.lastSessionID = sessionID }
             let previous = record.status
             let changed = pane.captureOK && record.pane.output != pane.output
             record.isPresent = true; record.lastSeen = now
             if changed { record.lastChanged = now }
-            let event = [newest[pane.id], pane.sessionEvent].compactMap { $0 }.max { $0.date < $1.date }
+            // Session-bound telemetry wins over pane-wide hooks, which may have
+            // arrived late from a different thread previously shown in this pane.
+            let event = record.lastSessionID != nil ? pane.sessionEvent
+                : [newest[pane.id], pane.sessionEvent].compactMap { $0 }.max { $0.date < $1.date }
             let freshEvent = event.map { candidate in
                 candidate.id != record.lastEventID
                     && candidate.date >= (record.lastEvent?.date ?? .distantPast)

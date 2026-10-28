@@ -1,21 +1,34 @@
 import Foundation
 
-/// Read only data attributable to the exact process/session, never guess by shared cwd.
+/// Read only data attributable to a process/session, never guess by shared cwd alone.
 public enum LocalSessionTelemetry {
     public static func enrich(_ pane: inout Pane, processes: [ProcessEntry], home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         let children = ProcessEntry.descendants(root: pane.pid, entries: processes)
         let agents = children.filter { AgentKind.detect($0.command) == pane.kind }
         guard !agents.isEmpty else { return }
         if pane.kind == .codex {
-            let pids = agents.map { String($0.pid) }.joined(separator: ",")
+            let root = home.appendingPathComponent(".codex")
+            if let session = CodexSessionIndex.resolve(title: pane.terminalTitle, directory: pane.directory, root: root),
+               let rows = tail(session.rollout) {
+                pane.sessionID = session.id
+                if let usage = codexContext(rows) { pane.contextUsage = usage }
+                pane.sessionEvent = codexEvent(rows, paneKey: pane.id)
+                return
+            }
+            // Only inspect the interactive process itself. A descendant daemon
+            // can own other terminals' rollouts, even if it has only one open.
+            let owners = codexOwners(root: pane.pid, processes: children)
+            guard !owners.isEmpty else { return }
+            let pids = owners.map { String($0.pid) }.joined(separator: ",")
             guard let result = try? Command.run("/usr/sbin/lsof", ["-a", "-p", pids, "-Fn"], timeout: 2), result.status == 0 else { return }
             let paths = Set(result.stdout.split(separator: "\n").compactMap { line -> String? in
                 guard line.hasPrefix("n/") else { return nil }
                 let path = String(line.dropFirst()), url = URL(fileURLWithPath: path)
                 return url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" ? path : nil
             })
-            // A shared server can own many sessions. Ambiguous attribution is not telemetry.
             guard paths.count == 1, let path = paths.first, let rows = tail(URL(fileURLWithPath: path)) else { return }
+            let id = String(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.suffix(36))
+            if UUID(uuidString: id) != nil { pane.sessionID = id }
             if let usage = codexContext(rows) { pane.contextUsage = usage }
             pane.sessionEvent = codexEvent(rows, paneKey: pane.id)
         } else if pane.kind == .claude {
@@ -48,6 +61,24 @@ public enum LocalSessionTelemetry {
                 break
             }
         }
+    }
+    static func codexOwners(root: Int, processes: [ProcessEntry]) -> [ProcessEntry] {
+        var pending = [root], seen = Set<Int>(), owners = [ProcessEntry]()
+        while let pid = pending.popLast() {
+            guard seen.insert(pid).inserted else { continue }
+            guard let process = processes.first(where: { $0.pid == pid }) else { continue }
+            let tokens = process.command.split(whereSeparator: { $0.isWhitespace })
+            if AgentKind.detect(process.command) == .codex {
+                if tokens.contains("app-server") { continue }
+                owners.append(process)
+                // Node launchers spawn the native CLI; a native CLI's children
+                // are tools or shared services, not its own session file owner.
+                let executable = tokens.first.map { URL(fileURLWithPath: String($0)).lastPathComponent } ?? ""
+                if !["node", "bun", "deno"].contains(executable) { continue }
+            }
+            pending += processes.filter { $0.parent == pid }.map(\.pid)
+        }
+        return owners
     }
     public static func codexEvent(_ rows: [[String: Any]], paneKey: String) -> AgentEvent? {
         for row in rows.reversed() {

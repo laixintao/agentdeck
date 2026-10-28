@@ -149,6 +149,37 @@ final class MonitorTests: XCTestCase {
         _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(12))
         XCTAssertEqual(monitor.records[p.id]?.status, .working)
     }
+    func testSwitchingThreadsInTheSameTerminalAcceptsTheSelectedThreadsOlderEvent() {
+        var monitor = Monitor(); var p = pane("Working (esc to interrupt)")
+        p.sessionID = "current-thread"
+        p.sessionEvent = AgentEvent(paneKey: p.id, date: start.addingTimeInterval(20), status: .working, summary: "Started")
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(21))
+        p.sessionID = "older-thread"
+        p.sessionEvent = AgentEvent(paneKey: p.id, date: start, status: .completed, summary: "Done")
+        p.output = "› prompt"
+        _ = monitor.ingest(scan([p]), events: [], now: start.addingTimeInterval(22))
+        XCTAssertEqual(monitor.records[p.id]?.status, .completed)
+    }
+    func testPaneWideHooksCannotOverrideTheIdentifiedSessionsLifecycle() {
+        var monitor = Monitor(); var p = pane("Working (esc to interrupt)")
+        p.sessionID = "current-thread"
+        p.sessionEvent = AgentEvent(paneKey: p.id, date: start, status: .working, summary: "Started")
+        let lateHook = AgentEvent(paneKey: p.id, date: start.addingTimeInterval(10), status: .completed, summary: "Previous thread finished")
+        _ = monitor.ingest(scan([p]), events: [lateHook], now: start.addingTimeInterval(11))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+        p.sessionEvent = nil // Lifecycle record has rolled out of the bounded log tail.
+        _ = monitor.ingest(scan([p]), events: [lateHook], now: start.addingTimeInterval(12))
+        XCTAssertEqual(monitor.records[p.id]?.status, .working)
+        p.sessionID = nil // A temporarily unavailable index must not revive stale hooks.
+        for _ in 0..<2 {
+            _ = monitor.ingest(scan([p]), events: [lateHook], now: start.addingTimeInterval(12))
+            XCTAssertEqual(monitor.records[p.id]?.status, .working)
+        }
+        p.sessionID = "current-thread"
+        p.sessionEvent = AgentEvent(paneKey: p.id, date: start.addingTimeInterval(13), status: .completed, summary: "Current thread finished")
+        _ = monitor.ingest(scan([p]), events: [lateHook], now: start.addingTimeInterval(14))
+        XCTAssertEqual(monitor.records[p.id]?.status, .completed)
+    }
     func testQuestionOverridesSessionStart() {
         var monitor = Monitor(); var p = pane("Working (esc to interrupt)\nQueued follow-up inputs\n? 1 question\n⌥e to answer")
         p.sessionEvent = AgentEvent(id: "start", paneKey: p.id, date: start, status: .working, summary: "Started", source: "session")

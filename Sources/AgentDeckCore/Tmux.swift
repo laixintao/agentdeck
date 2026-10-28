@@ -46,7 +46,7 @@ public struct Tmux: Sendable {
     public var executable: String
     public init(executable: String? = nil) { self.executable = executable ?? Command.find("tmux") ?? "/opt/homebrew/bin/tmux" }
     public static let separator = "\u{1f}"
-    public static let format = ["#{pid}", "#{session_name}", "#{window_index}", "#{pane_id}", "#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{@agentdeck_title}", "#{@agentdeck_kind}", "#{pane_dead}", "#{pane_dead_status}"].joined(separator: separator)
+    public static let format = ["#{pid}", "#{session_name}", "#{window_index}", "#{pane_id}", "#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{@agentdeck_title}", "#{@agentdeck_kind}", "#{pane_dead}", "#{pane_dead_status}", "#{pane_title}"].joined(separator: separator)
 
     public static func canonicalSocket(_ path: String) -> String {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
@@ -91,13 +91,14 @@ public struct Tmux: Sendable {
     public static func parse(_ line: String, socket: String, processes: [ProcessEntry], tracked: [String: AgentKind]) -> Pane? {
         let socket = canonicalSocket(socket)
         let p = line.components(separatedBy: separator)
-        guard p.count == 11, let server = Int(p[0]), let pid = Int(p[4]), p[3].hasPrefix("%") else { return nil }
+        guard [11, 12].contains(p.count), let server = Int(p[0]), let pid = Int(p[4]), p[3].hasPrefix("%") else { return nil }
         let key = "\(socket)|\(server)|\(p[3])|\(pid)"
         let detected = AgentKind.detect(p[5]) ?? ProcessEntry.agent(root: pid, entries: processes)
         let marked = AgentKind(rawValue: p[8])
         guard let kind = marked ?? detected ?? tracked[key] else { return nil }
         var pane = Pane(socket: socket, serverPID: server, session: p[1], window: p[2], paneID: p[3], pid: pid, command: p[5], directory: p[6], title: p[7], kind: kind, dead: p[9] == "1", exitCode: Int(p[10]))
         pane.agentRunning = detected != nil || marked != nil
+        if p.count == 12 { pane.terminalTitle = p[11] }
         return pane
     }
     public func scan(extraSockets: [String] = [], tracked: [String: AgentKind] = [:], onlySockets: [String]? = nil, captureOutput: Bool = true) -> ScanResult {
