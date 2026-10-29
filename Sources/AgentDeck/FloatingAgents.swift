@@ -22,6 +22,7 @@ final class AgentFloatingPanel: NSPanel {
     var onPress: (() -> Void)?
     private var press: (mouse: NSPoint, origin: NSPoint, dragging: Bool)?
     var isPointerPressed: Bool { press != nil }
+    func cancelPointerSequence() { press = nil }
 
     // Own the pointer sequence so dragging an icon never also opens its session.
     // Screen coordinates remain stable while the panel itself moves.
@@ -53,12 +54,15 @@ final class AgentFloatingPanel: NSPanel {
 
 @MainActor
 final class FloatingAgentsController {
+    private enum Suspension: Hashable { case screenLock, session, systemSleep, displaySleep }
     private weak var store: DeckStore?
     private let panel = AgentFloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     private let preview = AgentFloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     private var hoverID: String?
     private var hoverTask: DispatchWorkItem?
     private var previewRecordID: String?
+    private var suspensions = Set<Suspension>()
+    private var recoveryTasks = [DispatchWorkItem]()
     #if DEBUG
     private var terminalForVerification: ((String) -> Void)?
     #endif
@@ -101,7 +105,10 @@ final class FloatingAgentsController {
             if let id = self.agent(at: point) { self.open(id) }
         }
     }
-    deinit { for (center, token) in observations { center.removeObserver(token) } }
+    deinit {
+        for (center, token) in observations { center.removeObserver(token) }
+        recoveryTasks.forEach { $0.cancel() }
+    }
 
     func start() {
         guard !started, let store else { return }; started = true
@@ -112,6 +119,19 @@ final class FloatingAgentsController {
             NSApplication.didChangeScreenParametersNotification]
         for name in names { observe(name, center: .default) }
         observe(NSWorkspace.activeSpaceDidChangeNotification, center: NSWorkspace.shared.notificationCenter)
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (suspend, resume, reason) in [
+            (NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification, Suspension.systemSleep),
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, .displaySleep),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, .session)
+        ] {
+            observeSuspension(suspend, center: workspace, reason: reason, suspended: true)
+            observeSuspension(resume, center: workspace, reason: reason, suspended: false)
+        }
+        // A screen lock without sleep does not consistently emit workspace session events.
+        let distributed = DistributedNotificationCenter.default()
+        observeSuspension(.init("com.apple.screenIsLocked"), center: distributed, reason: .screenLock, suspended: true)
+        observeSuspension(.init("com.apple.screenIsUnlocked"), center: distributed, reason: .screenLock, suspended: false)
         subscription = store.$records.sink { [weak self] _ in DispatchQueue.main.async { self?.refresh() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             if CommandLine.arguments.contains("--start-hidden") { self?.mainWindow?.orderOut(nil); NSApp.hide(nil) }
@@ -121,12 +141,57 @@ final class FloatingAgentsController {
     private func observe(_ name: Notification.Name, center: NotificationCenter) {
         let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
             if note.object is AgentFloatingPanel { return }
-            DispatchQueue.main.async { self?.refresh() }
+            DispatchQueue.main.async {
+                if name == NSWorkspace.activeSpaceDidChangeNotification || name == NSApplication.didChangeScreenParametersNotification {
+                    self?.recoverWindows()
+                } else { self?.refresh() }
+            }
         }
         observations.append((center, token))
     }
-    func refresh() {
-        guard let store, let screen = NSScreen.screens.first else { panel.orderOut(nil); hidePreview(); return }
+    private func observeSuspension(_ name: Notification.Name, center: NotificationCenter, reason: Suspension, suspended: Bool) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.async { self?.setSuspended(suspended, for: reason) }
+        }
+        observations.append((center, token))
+    }
+    private func setSuspended(_ suspended: Bool, for reason: Suspension) {
+        if suspended {
+            suspensions.insert(reason)
+            cancelRecovery()
+            panel.cancelPointerSequence(); hidePreview(); panel.orderOut(nil)
+        } else {
+            suspensions.remove(reason)
+            recoverWindows()
+        }
+    }
+    private func cancelRecovery() {
+        recoveryTasks.forEach { $0.cancel() }; recoveryTasks.removeAll()
+    }
+    private func recoverWindows() {
+        cancelRecovery()
+        panel.cancelPointerSequence(); hidePreview()
+        guard suspensions.isEmpty else { return }
+        restoreWindows()
+        // WindowServer restores displays and Spaces asynchronously. isVisible alone
+        // can remain true even when the panel has not returned to the desktop.
+        for delay in [0.25, 1.0, 2.5] {
+            let task = DispatchWorkItem { [weak self] in self?.restoreWindows() }
+            recoveryTasks.append(task)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: task)
+        }
+    }
+    private func restoreWindows() {
+        guard suspensions.isEmpty else { return }
+        refresh(forceOrder: true)
+        guard panel.isVisible else { return }
+        (panel.contentView as? FloatingHostingView<FloatingAgentsView>)?.rebuildPointerTracking()
+        // The cursor may already be on an icon, with no fresh mouseEntered event.
+        let mouse = NSEvent.mouseLocation
+        hover(at: panel.frame.contains(mouse) && NSEvent.pressedMouseButtons == 0 ? panel.convertPoint(fromScreen: mouse) : nil)
+    }
+    func refresh(forceOrder: Bool = false) {
+        guard suspensions.isEmpty, let store, let screen = NSScreen.screens.first else { panel.orderOut(nil); hidePreview(); return }
         let mainInFront = NSApp.isActive && !NSApp.isHidden && mainWindow?.isVisible == true && mainWindow?.isMiniaturized == false
         guard !mainInFront, !store.live.isEmpty else { panel.orderOut(nil); hidePreview(); return }
         let available = screen.frame
@@ -138,7 +203,7 @@ final class FloatingAgentsController {
         let origin = customOrigin ?? NSPoint(x: available.minX + 12, y: available.minY + 12)
         let frame = clamped(NSRect(origin: origin, size: NSSize(width: width, height: height)))
         if panel.frame != frame { panel.setFrame(frame, display: true) }
-        if !panel.isVisible { panel.orderFrontRegardless() }
+        if forceOrder || !panel.isVisible { panel.orderFrontRegardless() }
         if let hoverID {
             if !store.live.contains(where: { $0.id == hoverID }) { hidePreview() }
             else if preview.isVisible { showPreview(for: hoverID) }
@@ -170,11 +235,13 @@ final class FloatingAgentsController {
         return layout.frames.first(where: { $0.value.contains(point) })?.key
     }
     private func hover(at point: NSPoint?) {
-        guard panel.isVisible, !panel.isPointerPressed, let point, let id = agent(at: point) else { hidePreview(); return }
-        guard hoverID != id else { return }
+        guard suspensions.isEmpty, panel.isVisible, !panel.isPointerPressed, let point, let id = agent(at: point) else { hidePreview(); return }
+        guard hoverID != id || (hoverTask == nil && !preview.isVisible) else { return }
         hidePreview(); hoverID = id
         let task = DispatchWorkItem { [weak self] in
-            guard let self, self.hoverID == id, self.panel.isVisible, !self.panel.isPointerPressed else { return }
+            guard let self, self.hoverID == id else { return }
+            self.hoverTask = nil
+            guard self.panel.isVisible, !self.panel.isPointerPressed else { return }
             self.showPreview(for: id)
         }
         hoverTask = task
@@ -236,7 +303,7 @@ final class FloatingAgentsController {
         guard let store, let id = store.live.sorted(by: { $0.id < $1.id }).first?.id else { throw DeckError.message("No agents to verify floating panel") }
         var terminalClicks = [String]()
         terminalForVerification = { terminalClicks.append($0) }
-        defer { terminalForVerification = nil; hidePreview() }
+        defer { terminalForVerification = nil; cancelRecovery(); hidePreview() }
         customOrigin = nil // Runtime verification uses an isolated data directory.
         store.showDetail = false; store.openMain()
         try await Task.sleep(for: .milliseconds(350)); refresh()
@@ -260,12 +327,25 @@ final class FloatingAgentsController {
         guard preview.isVisible, previewRecordID == id, !preview.canBecomeKey, !preview.isKeyWindow,
               preview.ignoresMouseEvents, screen.visibleFrame.contains(preview.frame), main.isMiniaturized else { throw DeckError.message("Hover preview routing, focus or screen placement failed") }
         savePreviewImage(to: snapshot.deletingLastPathComponent().appendingPathComponent("floating-preview-runtime.png"))
+        // AppKit may order the preview out while the pointer stays on the icon.
+        preview.orderOut(nil)
+        hosting.mouseMoved(with: hover)
+        try await Task.sleep(for: .milliseconds(350))
+        guard preview.isVisible, previewRecordID == id else { throw DeckError.message("Hover did not recover after the preview was ordered out") }
         hosting.mouseExited(with: hover)
         guard !preview.isVisible else { throw DeckError.message("Hover preview did not dismiss") }
         hosting.mouseEntered(with: hover)
         hosting.mouseExited(with: hover)
         try await Task.sleep(for: .milliseconds(300))
         guard !preview.isVisible else { throw DeckError.message("Cancelled hover preview appeared late") }
+        hosting.mouseEntered(with: hover)
+        panel.orderOut(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        refresh()
+        hosting.mouseMoved(with: hover)
+        try await Task.sleep(for: .milliseconds(350))
+        guard preview.isVisible else { throw DeckError.message("A hover interrupted before display could not recover") }
+        hosting.mouseExited(with: hover)
         func pointer(_ type: NSEvent.EventType, at screenPoint: NSPoint) throws {
             guard let event = NSEvent.mouseEvent(with: type, location: panel.convertPoint(fromScreen: screenPoint), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else { throw DeckError.message("Could not create floating-panel pointer event") }
             panel.sendEvent(event)
@@ -299,7 +379,35 @@ final class FloatingAgentsController {
         main.orderOut(nil); NSApp.hide(nil)
         try await Task.sleep(for: .milliseconds(300)); refresh()
         guard panel.isVisible else { throw DeckError.message("Floating panel disappeared with hidden app") }
+        let savedFrame = panel.frame
+        try pointer(.leftMouseDown, at: panel.convertPoint(toScreen: iconPoint))
+        // Drive our notification handlers locally; never lock the user's screen.
+        setSuspended(true, for: .screenLock)
+        setSuspended(true, for: .displaySleep)
+        refresh()
+        guard !panel.isVisible, !preview.isVisible, !panel.isPointerPressed, hoverTask == nil else { throw DeckError.message("Lock did not clear floating windows or the pending pointer sequence") }
+        setSuspended(false, for: .displaySleep)
+        guard !panel.isVisible else { throw DeckError.message("Display wake restored the panel before unlock") }
+        setSuspended(false, for: .screenLock)
+        // Simulate WindowServer hiding the panel again during the unlock animation.
+        panel.orderOut(nil)
+        try await Task.sleep(for: .milliseconds(450))
+        guard panel.isVisible, panel.frame == savedFrame, !panel.isKeyWindow else { throw DeckError.message("Unlock retry did not restore the floating panel") }
+        setSuspended(true, for: .systemSleep)
+        try await Task.sleep(for: .milliseconds(700))
+        guard !panel.isVisible else { throw DeckError.message("A stale recovery callback reopened a sleeping panel") }
+        setSuspended(true, for: .session)
+        setSuspended(false, for: .systemSleep)
+        guard !panel.isVisible else { throw DeckError.message("System wake ignored an inactive user session") }
+        setSuspended(false, for: .session)
+        try await Task.sleep(for: .milliseconds(2700))
+        guard panel.isVisible, panel.frame == savedFrame, !panel.isKeyWindow, !panel.isPointerPressed, terminalClicks == [id] else { throw DeckError.message("Wake/session recovery changed position, focus or terminal routing") }
+        hosting.mouseEntered(with: hover)
+        try await Task.sleep(for: .milliseconds(350))
+        guard preview.isVisible, previewRecordID == id, !preview.isKeyWindow else { throw DeckError.message("Hover did not recover after unlock with the app hidden") }
+        hosting.mouseExited(with: hover)
         store.openMain()
+        recoverWindows()
         try await Task.sleep(for: .milliseconds(300)); refresh()
         guard !panel.isVisible else { throw DeckError.message("Floating panel did not hide on returning to main window") }
         mainWindow?.performClose(nil)
@@ -308,7 +416,7 @@ final class FloatingAgentsController {
         store.openMain()
         try await Task.sleep(for: .milliseconds(400)); refresh()
         guard !panel.isVisible, mainWindow?.isVisible == true else { throw DeckError.message("Could not reopen the closed main window") }
-        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
+        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingHoverRecovery": "passed", "floatingUnlockRecovery": "passed", "floatingWakeRecovery": "passed", "floatingPointerRecovery": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
     }
     #endif
 }
@@ -317,6 +425,11 @@ private final class FloatingHostingView<Content: View>: NSHostingView<Content> {
     var onHoverPoint: ((NSPoint?) -> Void)?
     private var pointerTracking: NSTrackingArea?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    func rebuildPointerTracking() {
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        pointerTracking = nil
+        updateTrackingAreas()
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         guard pointerTracking == nil else { return }
