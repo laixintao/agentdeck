@@ -90,7 +90,8 @@ final class FloatingAgentsController: NSObject {
         panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let hosting = FloatingHostingView(rootView: FloatingAgentsView(store: store, layout: layout) { [weak self] id in self?.open(id) })
+        let hosting = FloatingHostingView(rootView: FloatingAgentsView(store: store, layout: layout,
+            onHome: { [weak self] in self?.openHome() }, onOpen: { [weak self] id in self?.open(id) }))
         hosting.onHoverPoint = { [weak self] point in self?.hover(at: point) }
         panel.contentView = hosting
         preview.identifier = NSUserInterfaceItemIdentifier("AgentDeck.floatingPreview")
@@ -103,7 +104,8 @@ final class FloatingAgentsController: NSObject {
         panel.onDrag = { [weak self] origin, finished in self?.move(to: origin, finished: finished) }
         panel.onClick = { [weak self] point in
             guard let self else { return }
-            if let id = self.agent(at: point) { self.open(id) }
+            if self.layout.homeFrame.contains(self.layoutPoint(point)) { self.openHome() }
+            else if let id = self.agent(at: point) { self.open(id) }
         }
     }
     deinit {
@@ -201,12 +203,12 @@ final class FloatingAgentsController: NSObject {
     func refresh(forceOrder: Bool = false) {
         guard suspensions.isEmpty, let store, let screen = NSScreen.screens.first else { panel.orderOut(nil); hidePreview(); return }
         let mainInFront = NSApp.isActive && !NSApp.isHidden && mainWindow?.isVisible == true && mainWindow?.isMiniaturized == false
-        guard !mainInFront, !store.live.isEmpty else { panel.orderOut(nil); hidePreview(); return }
+        guard !mainInFront else { panel.orderOut(nil); hidePreview(); return }
         let available = screen.frame
-        let columns = min(store.live.count, min(12, max(1, Int((available.width - 24 - FloatingMetrics.padding * 2 + FloatingMetrics.spacing) / (FloatingMetrics.cell + FloatingMetrics.spacing)))))
-        let rows = min(4, Int(ceil(Double(store.live.count) / Double(columns))))
-        if layout.columns != columns { layout.columns = columns }
-        let width = FloatingMetrics.length(columns)
+        let columns = min(store.live.count, min(12, max(1, Int((available.width - 24 - FloatingMetrics.padding * 2 - FloatingMetrics.cell) / (FloatingMetrics.cell + FloatingMetrics.spacing)))))
+        let rows = max(1, min(4, Int(ceil(Double(store.live.count) / Double(max(1, columns))))))
+        if layout.columns != max(1, columns) { layout.columns = max(1, columns) }
+        let width = FloatingMetrics.length(columns + 1)
         let height = FloatingMetrics.length(rows)
         let origin = customOrigin ?? NSPoint(x: available.minX + 12, y: available.minY + 12)
         let frame = clamped(NSRect(origin: origin, size: NSSize(width: width, height: height)))
@@ -238,8 +240,11 @@ final class FloatingAgentsController: NSObject {
         panel.setFrameOrigin(frame.origin)
         if finished { try? positionStore?.save(frame.origin, name: "floating-position.json") }
     }
+    private func layoutPoint(_ windowPoint: NSPoint) -> NSPoint {
+        NSPoint(x: windowPoint.x, y: panel.frame.height - windowPoint.y)
+    }
     private func agent(at windowPoint: NSPoint) -> String? {
-        let point = NSPoint(x: windowPoint.x, y: panel.frame.height - windowPoint.y)
+        let point = layoutPoint(windowPoint)
         return layout.frames.first(where: { $0.value.contains(point) })?.key
     }
     private func hover(at point: NSPoint?) {
@@ -285,6 +290,12 @@ final class FloatingAgentsController: NSObject {
         #endif
         store.terminal(record, revealErrors: true)
     }
+    private func openHome() {
+        hidePreview()
+        store?.showDetail = false; store?.showSettings = false
+        store?.openMain()
+        refresh()
+    }
     func saveSnapshot(to url: URL) {
         refresh()
         guard let view = panel.contentView, view.bounds.width > 0 else { return }
@@ -325,9 +336,12 @@ final class FloatingAgentsController: NSObject {
               abs(panel.frame.minY - screen.frame.minY - 12) < 1 else { throw DeckError.message("Floating panel placement or visibility failed") }
         guard layout.frames.count == store.live.count,
               layout.frames.values.allSatisfy({ $0.minX >= 0 && $0.maxX <= panel.frame.width + 1 && $0.minY >= 0 && $0.maxY <= panel.frame.height + 1 }) else { throw DeckError.message("Floating panel clipped an agent icon: \(layout.frames.count)/\(store.live.count)") }
+        guard layout.homeFrame.width == FloatingMetrics.cell, layout.homeFrame.minX == FloatingMetrics.padding,
+              layout.frames.values.allSatisfy({ $0.minX > layout.homeFrame.maxX }) else { throw DeckError.message("Home icon is missing from the left side: home=\(layout.homeFrame), agents=\(Array(layout.frames.values))") }
         saveSnapshot(to: snapshot)
         guard let iconFrame = layout.frames[id] else { throw DeckError.message("Missing floating icon bounds") }
         let iconPoint = NSPoint(x: iconFrame.midX, y: panel.frame.height - iconFrame.midY)
+        let homePoint = NSPoint(x: layout.homeFrame.midX, y: panel.frame.height - layout.homeFrame.midY)
         guard let hosting = panel.contentView as? FloatingHostingView<FloatingAgentsView>,
               let hover = NSEvent.mouseEvent(with: .mouseMoved, location: iconPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { throw DeckError.message("Could not create hover event") }
         hosting.mouseEntered(with: hover)
@@ -360,7 +374,7 @@ final class FloatingAgentsController: NSObject {
         }
         // Drag from an icon and from the surrounding glass, with two motion events
         // each to catch feedback caused by using a moving window's coordinates.
-        for point in [iconPoint, NSPoint(x: FloatingMetrics.padding / 2, y: FloatingMetrics.padding / 2)] {
+        for point in [homePoint, iconPoint, NSPoint(x: FloatingMetrics.padding / 2, y: FloatingMetrics.padding / 2)] {
             let origin = panel.frame.origin, start = panel.convertPoint(toScreen: point)
             try pointer(.leftMouseDown, at: start)
             try pointer(.leftMouseDragged, at: NSPoint(x: start.x + 40, y: start.y + 30))
@@ -375,6 +389,12 @@ final class FloatingAgentsController: NSObject {
         guard restored.customOrigin == panel.frame.origin else { throw DeckError.message("Floating position was not restored") }
         let outside = NSRect(x: screen.frame.maxX + 100_000, y: screen.frame.maxY + 100_000, width: panel.frame.width, height: panel.frame.height)
         guard screen.frame.contains(clamped(outside)) else { throw DeckError.message("An unavailable display left the panel offscreen") }
+        try pointer(.leftMouseDown, at: panel.convertPoint(toScreen: homePoint))
+        try pointer(.leftMouseUp, at: panel.convertPoint(toScreen: homePoint))
+        try await Task.sleep(for: .milliseconds(400)); refresh()
+        guard main.isVisible, !main.isMiniaturized, !panel.isVisible, !store.showDetail, !store.showSettings, terminalClicks.isEmpty else { throw DeckError.message("Home icon did not restore the main interface") }
+        main.miniaturize(nil)
+        try await Task.sleep(for: .milliseconds(700)); refresh()
         let point = iconPoint
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else { throw DeckError.message("Could not create floating-panel click") }
@@ -437,10 +457,11 @@ final class FloatingAgentsController: NSObject {
         mainWindow?.performClose(nil)
         try await Task.sleep(for: .milliseconds(300)); refresh()
         guard panel.isVisible else { throw DeckError.message("Floating panel disappeared after closing main window") }
-        store.openMain()
+        try pointer(.leftMouseDown, at: panel.convertPoint(toScreen: homePoint))
+        try pointer(.leftMouseUp, at: panel.convertPoint(toScreen: homePoint))
         try await Task.sleep(for: .milliseconds(400)); refresh()
-        guard !panel.isVisible, mainWindow?.isVisible == true else { throw DeckError.message("Could not reopen the closed main window") }
-        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingHoverRecovery": "passed", "floatingUnlockRecovery": "passed", "floatingBackgroundUnlock": "passed", "floatingWakeRecovery": "passed", "floatingPointerRecovery": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
+        guard !panel.isVisible, mainWindow?.isVisible == true, terminalClicks == [id] else { throw DeckError.message("Could not reopen the closed main window using Home") }
+        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHomeRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingHoverRecovery": "passed", "floatingUnlockRecovery": "passed", "floatingBackgroundUnlock": "passed", "floatingWakeRecovery": "passed", "floatingPointerRecovery": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
     }
     #endif
 }
@@ -467,7 +488,15 @@ private final class FloatingHostingView<Content: View>: NSHostingView<Content> {
 
 private final class FloatingLayout: ObservableObject {
     @Published var columns = 1
+    var homeFrame: CGRect = .zero
     var frames: [String: CGRect] = [:]
+}
+private struct FloatingHomeFrame: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isEmpty { value = next }
+    }
 }
 private struct FloatingIconFrames: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
@@ -477,24 +506,36 @@ private struct FloatingIconFrames: PreferenceKey {
 private struct FloatingAgentsView: View {
     @ObservedObject var store: DeckStore
     @ObservedObject var layout: FloatingLayout
+    let onHome: () -> Void
     let onOpen: (String) -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(FloatingMetrics.cell), spacing: FloatingMetrics.spacing), count: layout.columns), spacing: FloatingMetrics.spacing) {
-                ForEach(store.live.sorted { $0.id < $1.id }) { record in
-                    Button { onOpen(record.id) } label: {
-                        AnimatedAgentIcon(kind: record.pane.kind, status: record.status, size: FloatingMetrics.icon).frame(width: FloatingMetrics.cell, height: FloatingMetrics.cell)
-                    }.buttonStyle(.plain)
-                        .contextMenu {
-                            Button("查看详情") { store.openAgent(record.id) }
+        HStack(alignment: .top, spacing: FloatingMetrics.spacing) {
+            Button(action: onHome) {
+                Image(systemName: "house")
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(DeckTheme.text.opacity(0.8))
+                    .frame(width: FloatingMetrics.cell, height: FloatingMetrics.cell).contentShape(Rectangle())
+            }.buttonStyle(.plain).help("打开主界面").accessibilityLabel("打开 AgentDeck 主界面")
+                .background(GeometryReader { geometry in Color.clear.preference(key: FloatingHomeFrame.self, value: geometry.frame(in: .named("floating-panel"))) })
+            if !store.live.isEmpty {
+                ScrollView(.vertical) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(FloatingMetrics.cell), spacing: FloatingMetrics.spacing), count: layout.columns), spacing: FloatingMetrics.spacing) {
+                        ForEach(store.live.sorted { $0.id < $1.id }) { record in
+                            Button { onOpen(record.id) } label: {
+                                AnimatedAgentIcon(kind: record.pane.kind, status: record.status, size: FloatingMetrics.icon).frame(width: FloatingMetrics.cell, height: FloatingMetrics.cell)
+                            }.buttonStyle(.plain)
+                                .contextMenu {
+                                    Button("查看详情") { store.openAgent(record.id) }
+                                }
+                                .background(GeometryReader { geometry in Color.clear.preference(key: FloatingIconFrames.self, value: [record.id: geometry.frame(in: .named("floating-panel"))]) })
+                                .accessibilityLabel("\(record.pane.title.isEmpty ? record.pane.project : record.pane.title)，\(record.pane.kind.title)，\(record.status.title)，\(record.pane.hermesSession == nil ? "定位终端" : "打开 Hermes")")
                         }
-                        .background(GeometryReader { geometry in Color.clear.preference(key: FloatingIconFrames.self, value: [record.id: geometry.frame(in: .named("floating-panel"))]) })
-                        .accessibilityLabel("\(record.pane.title.isEmpty ? record.pane.project : record.pane.title)，\(record.pane.kind.title)，\(record.status.title)，\(record.pane.hermesSession == nil ? "定位终端" : "打开 Hermes")")
-                }
-            }.padding(FloatingMetrics.padding)
-        }.scrollIndicators(.hidden).coordinateSpace(name: "floating-panel")
+                    }
+                }.scrollIndicators(.hidden)
+            }
+        }.padding(FloatingMetrics.padding).coordinateSpace(name: "floating-panel")
             .onPreferenceChange(FloatingIconFrames.self) { layout.frames = $0 }
+            .onPreferenceChange(FloatingHomeFrame.self) { layout.homeFrame = $0 }
             .background {
                 if reduceTransparency { DeckTheme.surface }
                 else { FloatingGlass().opacity(0.80) }
