@@ -53,7 +53,7 @@ final class AgentFloatingPanel: NSPanel {
 }
 
 @MainActor
-final class FloatingAgentsController {
+final class FloatingAgentsController: NSObject {
     private enum Suspension: Hashable { case screenLock, session, systemSleep, displaySleep }
     private weak var store: DeckStore?
     private let panel = AgentFloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -77,6 +77,7 @@ final class FloatingAgentsController {
     init(store: DeckStore) {
         self.store = store
         positionStore = store.demo ? nil : EventStore()
+        super.init()
         if let saved = positionStore?.load(NSPoint.self, name: "floating-position.json"), saved.x.isFinite, saved.y.isFinite { customOrigin = saved }
         panel.identifier = NSUserInterfaceItemIdentifier("AgentDeck.floating")
         panel.level = .floating
@@ -107,6 +108,7 @@ final class FloatingAgentsController {
     }
     deinit {
         for (center, token) in observations { center.removeObserver(token) }
+        DistributedNotificationCenter.default().removeObserver(self)
         recoveryTasks.forEach { $0.cancel() }
     }
 
@@ -129,9 +131,7 @@ final class FloatingAgentsController {
             observeSuspension(resume, center: workspace, reason: reason, suspended: false)
         }
         // A screen lock without sleep does not consistently emit workspace session events.
-        let distributed = DistributedNotificationCenter.default()
-        observeSuspension(.init("com.apple.screenIsLocked"), center: distributed, reason: .screenLock, suspended: true)
-        observeSuspension(.init("com.apple.screenIsUnlocked"), center: distributed, reason: .screenLock, suspended: false)
+        observeScreenLock(locked: .init("com.apple.screenIsLocked"), unlocked: .init("com.apple.screenIsUnlocked"))
         subscription = store.$records.sink { [weak self] _ in DispatchQueue.main.async { self?.refresh() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             if CommandLine.arguments.contains("--start-hidden") { self?.mainWindow?.orderOut(nil); NSApp.hide(nil) }
@@ -155,6 +155,14 @@ final class FloatingAgentsController {
         }
         observations.append((center, token))
     }
+    private func observeScreenLock(locked: Notification.Name, unlocked: Notification.Name) {
+        let center = DistributedNotificationCenter.default()
+        // AppKit suspends ordinary distributed notifications while the app is inactive.
+        center.addObserver(self, selector: #selector(screenDidLock), name: locked, object: nil, suspensionBehavior: .deliverImmediately)
+        center.addObserver(self, selector: #selector(screenDidUnlock), name: unlocked, object: nil, suspensionBehavior: .deliverImmediately)
+    }
+    @objc private func screenDidLock(_ notification: Notification) { setSuspended(true, for: .screenLock) }
+    @objc private func screenDidUnlock(_ notification: Notification) { setSuspended(false, for: .screenLock) }
     private func setSuspended(_ suspended: Bool, for reason: Suspension) {
         if suspended {
             suspensions.insert(reason)
@@ -379,6 +387,22 @@ final class FloatingAgentsController {
         main.orderOut(nil); NSApp.hide(nil)
         try await Task.sleep(for: .milliseconds(300)); refresh()
         guard panel.isVisible else { throw DeckError.message("Floating panel disappeared with hidden app") }
+        // Exercise the real distributed delivery mechanism using private names.
+        let distributed = DistributedNotificationCenter.default()
+        let testLock = Notification.Name("app.agentdeck.verify.lock.\(UUID().uuidString)")
+        let testUnlock = Notification.Name("app.agentdeck.verify.unlock.\(UUID().uuidString)")
+        observeScreenLock(locked: testLock, unlocked: testUnlock)
+        defer {
+            distributed.removeObserver(self, name: testLock, object: nil)
+            distributed.removeObserver(self, name: testUnlock, object: nil)
+        }
+        guard distributed.suspended else { throw DeckError.message("Background notification test requires an inactive application") }
+        distributed.postNotificationName(testLock, object: nil, userInfo: nil, deliverImmediately: false)
+        try await Task.sleep(for: .milliseconds(300))
+        guard suspensions.contains(.screenLock), !panel.isVisible else { throw DeckError.message("Background application did not receive the screen-lock notification") }
+        distributed.postNotificationName(testUnlock, object: nil, userInfo: nil, deliverImmediately: false)
+        try await Task.sleep(for: .milliseconds(300))
+        guard !suspensions.contains(.screenLock), panel.isVisible else { throw DeckError.message("Background application did not receive the screen-unlock notification") }
         let savedFrame = panel.frame
         try pointer(.leftMouseDown, at: panel.convertPoint(toScreen: iconPoint))
         // Drive our notification handlers locally; never lock the user's screen.
@@ -416,7 +440,7 @@ final class FloatingAgentsController {
         store.openMain()
         try await Task.sleep(for: .milliseconds(400)); refresh()
         guard !panel.isVisible, mainWindow?.isVisible == true else { throw DeckError.message("Could not reopen the closed main window") }
-        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingHoverRecovery": "passed", "floatingUnlockRecovery": "passed", "floatingWakeRecovery": "passed", "floatingPointerRecovery": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
+        return ["floatingVisibility": "passed", "floatingPrimaryBottomLeft": "passed", "floatingAlwaysOnTop": "passed", "floatingNonactivating": "passed", "floatingTerminalRouting": "passed", "floatingHoverPreview": "passed", "floatingHoverDismissal": "passed", "floatingHoverRecovery": "passed", "floatingUnlockRecovery": "passed", "floatingBackgroundUnlock": "passed", "floatingWakeRecovery": "passed", "floatingPointerRecovery": "passed", "floatingClosedWindowReopen": "passed", "floatingAllIconsVisible": "passed", "floatingDrag": "passed", "floatingPositionPersistence": "passed", "floatingScreenClamping": "passed"]
     }
     #endif
 }
