@@ -84,14 +84,15 @@ public struct Tmux: Sendable {
         return parts.dropLast(2).joined(separator: ",")
     }
     public func call(_ args: [String], socket: String, timeout: TimeInterval = 5, input: Data? = nil) throws -> String {
-        let result = try Command.run(executable, ["-S", socket] + args, timeout: timeout, input: input)
+        // Finder/launchd supplies no UTF-8 locale. Without -u, tmux replaces
+        // both our field separator and non-ASCII output with underscores.
+        let result = try Command.run(executable, ["-u", "-S", socket] + args, timeout: timeout, input: input)
         guard result.status == 0 else { throw DeckError.message(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)) }
         return result.stdout
     }
     public static func parse(_ line: String, socket: String, processes: [ProcessEntry], tracked: [String: AgentKind]) -> Pane? {
         let socket = canonicalSocket(socket)
-        let p = line.components(separatedBy: separator)
-        guard [11, 12].contains(p.count), let server = Int(p[0]), let pid = Int(p[4]), p[3].hasPrefix("%") else { return nil }
+        guard let p = fields(line), let server = Int(p[0]), let pid = Int(p[4]) else { return nil }
         let key = "\(socket)|\(server)|\(p[3])|\(pid)"
         let detected = AgentKind.detect(p[5]) ?? ProcessEntry.agent(root: pid, entries: processes)
         let marked = AgentKind(rawValue: p[8])
@@ -100,6 +101,12 @@ public struct Tmux: Sendable {
         pane.agentRunning = detected != nil || marked != nil
         if p.count == 12 { pane.terminalTitle = p[11] }
         return pane
+    }
+    private static func fields(_ line: String) -> [String]? {
+        let fields = line.components(separatedBy: separator)
+        guard [11, 12].contains(fields.count), Int(fields[0]) != nil, Int(fields[4]) != nil,
+              fields[3].hasPrefix("%") else { return nil }
+        return fields
     }
     public func scan(extraSockets: [String] = [], tracked: [String: AgentKind] = [:], onlySockets: [String]? = nil, captureOutput: Bool = true) -> ScanResult {
         var result = ScanResult(panes: [], errors: [], successfulSockets: [], socketCount: 0)
@@ -114,8 +121,13 @@ public struct Tmux: Sendable {
         for socket in sockets {
             do {
                 let text = try call(["list-panes", "-a", "-F", Self.format], socket: socket)
-                result.successfulSockets.insert(socket)
-                for line in text.components(separatedBy: "\n") {
+                let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+                if lines.contains(where: { Self.fields($0) == nil }) {
+                    result.errors.append("\(URL(fileURLWithPath: socket).lastPathComponent)：tmux 返回了无法解析的 pane 数据；保留上次状态。")
+                } else {
+                    result.successfulSockets.insert(socket)
+                }
+                for line in lines {
                     guard var pane = Self.parse(line, socket: socket, processes: processes, tracked: tracked) else { continue }
                     if !pane.dead, let agent = ProcessEntry.interactiveAgent(root: pane.pid, kind: pane.kind, entries: processes) {
                         pane.agentPID = agent.pid

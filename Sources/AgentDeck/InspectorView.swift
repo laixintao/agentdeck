@@ -95,7 +95,18 @@ struct SettingsView: View {
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             HStack { Text("偏好设置").font(.system(size: 22, weight: .semibold)); Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction) }
-            if !store.errors.isEmpty { GroupBox("连接状态") { Text(store.errors.joined(separator: "\n")).foregroundStyle(.orange).textSelection(.enabled).padding(10) } }
+            GroupBox("连接状态") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("tmux 连接：\(store.socketCount) · 当前显示：\(store.live.count) 个 Agent")
+                    if let date = store.lastRefresh {
+                        Text("最近扫描：\(date.formatted(date: .omitted, time: .standard))").foregroundStyle(DeckTheme.muted)
+                    } else {
+                        Text("正在扫描本机会话…").foregroundStyle(DeckTheme.muted)
+                    }
+                    Text("tmux：\(store.tmux.executable)").foregroundStyle(DeckTheme.muted).textSelection(.enabled)
+                    if !store.errors.isEmpty { Text(store.errors.joined(separator: "\n")).foregroundStyle(.orange).textSelection(.enabled) }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+            }
             GroupBox("tmux 连接") {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("tmux 路径（留空自动查找）", text: $store.tmuxPath)

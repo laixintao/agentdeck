@@ -111,6 +111,8 @@ agentdeckctl event --state failed
 
 终端约 120 行历史、最多 2 MB 会话日志尾部和 Hermes 有界事件输出仅在内存中处理。`~/Library/Application Support/AgentDeck/events` 的无正文状态事件保留 7 天，`state.json` 仅保存事件去重游标；不生成通知历史。
 
+tmux 扫描显式使用 UTF-8 输出，从 Finder、Dock 或登录启动时无需配置终端语言环境。设置中的「连接状态」显示连接数、可见 Agent 数、最近扫描时间和 tmux 路径；无法解析的扫描结果会报告错误并保留上次状态。
+
 终端发送使用独立的 tmux buffer 和 bracketed paste，等待粘贴处理后单独发送 Enter，以提交新消息。不会改动系统剪贴板或已有 tmux buffer。拒绝控制字符 / 多行文本；输入前及提交前复核进程身份，避免发到已退出 Agent 的 shell。发送失败保留输入框里的消息。「打开 tmux」通过终端的 AppleScript 接口聚焦原标签页，可能需要 macOS 自动化授权；其他终端会激活所属应用。远程 SSH 与 control-mode client 不用于窗口复用。也可复制连接命令手动使用其他终端。
 
 ## 版本发布
