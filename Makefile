@@ -1,4 +1,4 @@
-.PHONY: test build ci-package release release-validate release-verify release-publish
+.PHONY: test build clean ci-package release release-validate release-verify release-publish
 
 test:
 	./scripts/test.sh
@@ -6,6 +6,9 @@ test:
 
 build:
 	./scripts/build-app.sh release
+
+clean:
+	rm -rf artifacts dist
 
 ci-package: test build
 	./scripts/package-app.sh
